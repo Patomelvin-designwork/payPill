@@ -1,0 +1,204 @@
+@import url('https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700;900&family=Montserrat:wght@400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* White & Green Theme */
+    --background: 0 0% 100%;
+    --foreground: 145 60% 18%;
+    --card: 0 0% 100%;
+    --card-foreground: 145 60% 18%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 145 60% 18%;
+    --primary: 145 63% 32%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 145 30% 96%;
+    --secondary-foreground: 145 60% 18%;
+    --muted: 145 20% 96%;
+    --muted-foreground: 145 20% 45%;
+    --accent: 145 70% 45%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 145 20% 90%;
+    --input: 145 20% 90%;
+    --ring: 145 63% 32%;
+    --radius: 0.75rem;
+    
+    /* Custom Green Palette */
+    --green-50: #f0fdf4;
+    --green-100: #dcfce7;
+    --green-200: #bbf7d0;
+    --green-300: #86efac;
+    --green-400: #4ade80;
+    --green-500: #22c55e;
+    --green-600: #16a34a;
+    --green-700: #15803d;
+    --green-800: #166534;
+    --green-900: #14532d;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Lato', system-ui, sans-serif;
+    font-weight: 400;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  
+  /* Headings - Montserrat */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Montserrat', system-ui, sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  
+  h1 {
+    font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+  
+  h2 {
+    font-weight: 700;
+  }
+  
+  h3 {
+    font-weight: 600;
+  }
+  
+  h4, h5, h6 {
+    font-weight: 600;
+  }
+}
+
+@layer utilities {
+  /* Glassmorphism for white theme */
+  .glass {
+    @apply bg-white/80 backdrop-blur-xl border border-green-100 shadow-sm;
+  }
+  
+  .glass-strong {
+    @apply bg-white/95 backdrop-blur-2xl border border-green-200 shadow-lg;
+  }
+  
+  .glass-card {
+    @apply bg-white border border-green-100 rounded-xl shadow-sm;
+  }
+  
+  /* Green Glow Effects */
+  .glow-green {
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.3),
+                0 0 40px rgba(34, 197, 94, 0.15);
+  }
+  
+  .glow-green-soft {
+    box-shadow: 0 4px 20px rgba(34, 197, 94, 0.15);
+  }
+  
+  /* Gradient Text */
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-green-600 to-emerald-500;
+  }
+  
+  /* Soft shadows */
+  .shadow-soft {
+    box-shadow: 0 2px 15px rgba(0, 0, 0, 0.05);
+  }
+  
+  .shadow-green {
+    box-shadow: 0 4px 20px rgba(34, 197, 94, 0.15);
+  }
+  
+  /* Green Card */
+  .green-card {
+    @apply relative overflow-hidden rounded-xl;
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.05) 0%, rgba(22, 163, 74, 0.05) 100%);
+    border: 1px solid rgba(34, 197, 94, 0.2);
+  }
+  
+  /* Grid Pattern - subtle green */
+  .bg-grid {
+    background-image: 
+      linear-gradient(rgba(34, 197, 94, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(34, 197, 94, 0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  
+  /* Floating Animation */
+  .float {
+    animation: float 6s ease-in-out infinite;
+  }
+  
+  /* Pulse Glow Animation */
+  .pulse-glow {
+    animation: pulse-glow-green 2s ease-in-out infinite;
+  }
+}
+
+/* Custom Scrollbar for the app */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #f0fdf4;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #86efac;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #4ade80;
+}
+
+/* Selection Color - Green */
+::selection {
+  background: rgba(34, 197, 94, 0.2);
+  color: #14532d;
+}
+
+/* Focus Ring - Green */
+*:focus-visible {
+  outline: 2px solid #22c55e;
+  outline-offset: 2px;
+}
+
+/* Animation keyframes */
+@keyframes pulse-glow-green {
+  0%, 100% { 
+    opacity: 1; 
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.3);
+  }
+  50% { 
+    opacity: 0.9; 
+    box-shadow: 0 0 30px rgba(34, 197, 94, 0.5);
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes gradient {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
