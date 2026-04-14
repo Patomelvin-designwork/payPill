@@ -105,18 +105,24 @@ export const usePaypillStore = create<PaypillState>((set) => ({
 
   signUp: async ({ email, password, name }) => {
     const normalizedEmail = email.trim().toLowerCase();
+    try {
+      const { data: existingResult, error: existingError } = await supabase.rpc(
+        "user_exists_by_email",
+        { email_input: normalizedEmail }
+      );
 
-    const { data: existingResult, error: existingError } = await supabase.rpc(
-      "user_exists_by_email",
-      { email_input: normalizedEmail }
-    );
+      // Some environments may not have the RPC yet. Fallback to auth error handling.
+      if (existingError && existingError.code !== "PGRST202" && !existingError.message.includes("404")) {
+        throw existingError;
+      }
 
-    if (existingError) {
-      throw existingError;
-    }
-
-    if (existingResult) {
-      throw new Error("An account with this email already exists. Please sign in.");
+      if (existingResult) {
+        throw new Error("An account with this email already exists. Please sign in.");
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("already exists")) {
+        throw error;
+      }
     }
 
     const { data, error } = await supabase.auth.signUp({
@@ -130,10 +136,15 @@ export const usePaypillStore = create<PaypillState>((set) => ({
     });
 
     if (error || !data.user) {
-      throw error || new Error("Unable to create account.");
+      const message = error?.message || "Unable to create account.";
+      if (message.toLowerCase().includes("already registered")) {
+        throw new Error("An account with this email already exists. Please sign in.");
+      }
+      throw error || new Error(message);
     }
 
-    const { error: profileError } = await supabase.from("profiles").upsert(
+    // Best-effort profile sync. If the table/RLS/trigger is not ready, do not block auth signup.
+    await supabase.from("profiles").upsert(
       {
         id: data.user.id,
         email: normalizedEmail,
@@ -141,10 +152,6 @@ export const usePaypillStore = create<PaypillState>((set) => ({
       },
       { onConflict: "id" }
     );
-
-    if (profileError) {
-      throw profileError;
-    }
 
     if (data.session) {
       set({
