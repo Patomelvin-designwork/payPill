@@ -21,6 +21,7 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import AIQuestionnaire from './AIQuestionnaire';
 import { usePaypillStore, userInitials } from '@/store/paypill-store';
+import { supabase } from '@/lib/supabase';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 
@@ -29,7 +30,9 @@ import { toast } from 'sonner';
 // ============================================
 function GuestOnly({ children }: { children: React.ReactNode }) {
   const isAuthenticated = usePaypillStore((s) => s.isAuthenticated);
+  const isLoading = usePaypillStore((s) => s.isLoading);
   const onboardingComplete = usePaypillStore((s) => s.onboardingComplete);
+  if (isLoading) return <LoadingScreen />;
   if (isAuthenticated) {
     return <Navigate to={onboardingComplete ? '/dashboard' : '/onboarding'} replace />;
   }
@@ -38,7 +41,9 @@ function GuestOnly({ children }: { children: React.ReactNode }) {
 
 function RequireDashboard({ children }: { children: React.ReactNode }) {
   const isAuthenticated = usePaypillStore((s) => s.isAuthenticated);
+  const isLoading = usePaypillStore((s) => s.isLoading);
   const onboardingComplete = usePaypillStore((s) => s.onboardingComplete);
+  if (isLoading) return <LoadingScreen />;
   if (!isAuthenticated) return <Navigate to="/signin" replace />;
   if (!onboardingComplete) return <Navigate to="/onboarding" replace />;
   return <>{children}</>;
@@ -46,10 +51,20 @@ function RequireDashboard({ children }: { children: React.ReactNode }) {
 
 function RequireOnboarding({ children }: { children: React.ReactNode }) {
   const isAuthenticated = usePaypillStore((s) => s.isAuthenticated);
+  const isLoading = usePaypillStore((s) => s.isLoading);
   const onboardingComplete = usePaypillStore((s) => s.onboardingComplete);
+  if (isLoading) return <LoadingScreen />;
   if (!isAuthenticated) return <Navigate to="/signin" replace />;
   if (onboardingComplete) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
+}
+
+function LoadingScreen() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 via-white to-emerald-50">
+      <p className="text-green-700 font-medium">Loading your session...</p>
+    </div>
+  );
 }
 
 // ============================================
@@ -76,18 +91,27 @@ const HelpTooltip = ({ content, children }: { content: string; children: React.R
 // ============================================
 function SignInPage() {
   const navigate = useNavigate();
-  const login = usePaypillStore((s) => s.login);
+  const signIn = usePaypillStore((s) => s.signIn);
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Mock authentication
-    login(email || 'demo@paypill.local', 'John Doe');
-    toast.success('Signed in (demo mode)');
-    navigate('/onboarding');
+    setIsSubmitting(true);
+    try {
+      await signIn({ email, password });
+      toast.success('Signed in successfully');
+      navigate('/onboarding');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unable to sign in. Please verify your credentials.';
+      toast.error(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -250,9 +274,10 @@ function SignInPage() {
                 {/* Submit Button */}
                 <Button
                   type="submit"
+                  disabled={isSubmitting}
                   className="w-full h-12 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl shadow-green transition-all duration-200 hover:shadow-lg"
                 >
-                  Sign in
+                  {isSubmitting ? 'Signing in...' : 'Sign in'}
                   <ArrowRight className="w-5 h-5 ml-2" />
                 </Button>
 
@@ -324,9 +349,14 @@ function SignInPage() {
 // ============================================
 function SignUpPage() {
   const navigate = useNavigate();
-  const login = usePaypillStore((s) => s.login);
+  const signUp = usePaypillStore((s) => s.signUp);
+  const verifySignUpCode = usePaypillStore((s) => s.verifySignUpCode);
   const [step, setStep] = useState(1);
   const [showPassword, setShowPassword] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [awaitingVerification, setAwaitingVerification] = useState(false);
+  const [verificationCode, setVerificationCode] = useState('');
+  const [verificationEmail, setVerificationEmail] = useState('');
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -336,15 +366,42 @@ function SignUpPage() {
     allergies: [] as string[]
   });
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (step < 3) {
       setStep(step + 1);
     } else {
-      const name =
-        `${formData.firstName} ${formData.lastName}`.trim() || 'New User';
-      login(formData.email || 'demo@paypill.local', name);
-      toast.success('Account created (demo mode)');
+      setIsSubmitting(true);
+      try {
+        const name = `${formData.firstName} ${formData.lastName}`.trim() || 'New User';
+        const result = await signUp({ email: formData.email, password: formData.password, name });
+        if (result.requiresVerification) {
+          setVerificationEmail(formData.email.trim().toLowerCase());
+          setAwaitingVerification(true);
+          toast.success('Account created. Enter the verification code sent to your email.');
+        } else {
+          toast.success('Account created successfully');
+          navigate('/onboarding');
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to create account.';
+        toast.error(message);
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    setIsSubmitting(true);
+    try {
+      await verifySignUpCode(verificationEmail, verificationCode);
+      toast.success('Email verified successfully');
       navigate('/onboarding');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to verify code.';
+      toast.error(message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -439,6 +496,52 @@ function SignUpPage() {
                 </p>
               </div>
 
+              {awaitingVerification && (
+                <div className="space-y-5">
+                  <div className="rounded-xl border border-green-100 bg-green-50/50 p-4">
+                    <p className="text-sm text-green-700">
+                      Enter the verification code sent to <span className="font-semibold">{verificationEmail}</span>.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="verificationCode" className="text-green-800 font-medium">
+                      Verification Code
+                    </Label>
+                    <Input
+                      id="verificationCode"
+                      type="text"
+                      value={verificationCode}
+                      onChange={(e) => setVerificationCode(e.target.value)}
+                      placeholder="Enter your verification code"
+                      className="h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400 focus:border-green-500 focus:ring-green-500/20"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={handleVerifyCode}
+                    disabled={isSubmitting || verificationCode.trim().length === 0}
+                    className="w-full h-12 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl shadow-green transition-all duration-200 hover:shadow-lg"
+                  >
+                    {isSubmitting ? 'Verifying...' : 'Verify Code'}
+                    <CheckCircle className="w-5 h-5 ml-2" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isSubmitting}
+                    onClick={() => {
+                      setAwaitingVerification(false);
+                      setVerificationCode('');
+                    }}
+                    className="w-full border-green-200 text-green-700 hover:bg-green-50"
+                  >
+                    Back to Signup
+                  </Button>
+                </div>
+              )}
+
+              {!awaitingVerification && (
+                <>
               {/* Progress Steps */}
               <div className="mb-8">
                 <div className="flex items-center justify-between">
@@ -665,10 +768,11 @@ function SignUpPage() {
                 )}
                 <Button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={handleContinue}
                   className="flex-1 h-12 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl shadow-green transition-all duration-200 hover:shadow-lg"
                 >
-                  {step === 3 ? 'Create Account' : 'Continue'}
+                  {step === 3 ? (isSubmitting ? 'Creating Account...' : 'Create Account') : 'Continue'}
                   <ArrowRight className="w-5 h-5 ml-2" />
                 </Button>
               </div>
@@ -678,6 +782,8 @@ function SignUpPage() {
                 <a href="#" className="underline hover:text-green-700">Terms</a> and{' '}
                 <a href="#" className="underline hover:text-green-700">Privacy Policy</a>
               </p>
+                </>
+              )}
             </CardContent>
           </Card>
         </motion.div>
@@ -747,18 +853,26 @@ function OnboardingPage() {
     }
   ];
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step < steps.length - 1) {
       setStep(step + 1);
     } else {
-      completeOnboarding();
-      navigate('/dashboard');
+      try {
+        await completeOnboarding();
+        navigate('/dashboard');
+      } catch {
+        toast.error('Unable to complete onboarding right now.');
+      }
     }
   };
 
-  const handleSkip = () => {
-    completeOnboarding();
-    navigate('/dashboard');
+  const handleSkip = async () => {
+    try {
+      await completeOnboarding();
+      navigate('/dashboard');
+    } catch {
+      toast.error('Unable to skip onboarding right now.');
+    }
   };
 
   const currentStep = steps[step];
@@ -862,7 +976,7 @@ function OnboardingPage() {
 function DashboardLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const logout = usePaypillStore((s) => s.logout);
+  const signOut = usePaypillStore((s) => s.signOut);
   const user = usePaypillStore((s) => s.user);
   const displayName = user?.name ?? 'Guest';
   const ppll = user?.ppllBalance ?? 0;
@@ -878,8 +992,8 @@ function DashboardLayout({ children }: { children: React.ReactNode }) {
     { path: '/dashboard/settings', label: 'Settings', icon: Settings },
   ];
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await signOut();
     navigate('/signin');
   };
 
@@ -1018,30 +1132,84 @@ function DashboardOverview() {
   const navigate = useNavigate();
   const user = usePaypillStore((s) => s.user);
   const firstName = (user?.name ?? 'there').split(/\s+/)[0] || 'there';
+  const [isLoading, setIsLoading] = useState(true);
+  const [medications, setMedications] = useState<Array<{ id: string; name: string; dosage: string; frequency: string; status: 'taken' | 'due' }>>([]);
+  const [contracts, setContracts] = useState<Array<{ id: string; endDate: string | null; lockedPrice: number | null; quantity: string | null }>>([]);
+  const [adherenceRate, setAdherenceRate] = useState(0);
+  const [activities, setActivities] = useState<Array<{ text: string; time: string; reward: string }>>([]);
+
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      if (!user?.id) return;
+      setIsLoading(true);
+      try {
+        const [medicationsResult, contractsResult, adherenceResult] = await Promise.all([
+          supabase
+            .from('patient_medications')
+            .select('id,dosage,frequency,medications(name)')
+            .eq('user_id', user.id)
+            .eq('active', true)
+            .limit(5),
+          supabase
+            .from('smart_contracts')
+            .select('id,end_at,locked_price,quantity,status')
+            .eq('user_id', user.id)
+            .eq('status', 'active'),
+          supabase
+            .from('adherence_events')
+            .select('status,occurred_at')
+            .eq('user_id', user.id)
+            .gte('occurred_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
+        ]);
+
+        if (medicationsResult.error) throw medicationsResult.error;
+        if (contractsResult.error) throw contractsResult.error;
+        if (adherenceResult.error) throw adherenceResult.error;
+
+        const meds = (medicationsResult.data ?? []).map((m: any) => ({
+          id: m.id,
+          name: m.medications?.name ?? 'Medication',
+          dosage: m.dosage,
+          frequency: m.frequency,
+          status: 'due' as const,
+        }));
+        setMedications(meds);
+
+        const activeContracts = (contractsResult.data ?? []).map((c: any) => ({
+          id: c.id,
+          endDate: c.end_at,
+          lockedPrice: c.locked_price,
+          quantity: c.quantity,
+        }));
+        setContracts(activeContracts);
+
+        const events = adherenceResult.data ?? [];
+        const taken = events.filter((e: any) => e.status === 'taken').length;
+        const rate = events.length ? Math.round((taken / events.length) * 100) : 0;
+        setAdherenceRate(rate);
+
+        setActivities(
+          events.slice(0, 4).map((e: any) => ({
+            text: `Medication marked as ${e.status}`,
+            time: new Date(e.occurred_at).toLocaleString(),
+            reward: '',
+          }))
+        );
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to load dashboard data.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void fetchDashboardData();
+  }, [user?.id]);
 
   const stats = [
-    { label: 'PPLL Balance', value: '1,250', subtext: '$12.50 USD', change: '+5 today', icon: Sparkles, color: 'green' },
-    { label: 'Adherence Rate', value: '92%', subtext: 'Last 30 days', change: 'Great!', icon: Activity, color: 'emerald' },
-    { label: 'Active Contracts', value: '2', subtext: 'Next refill in 5 days', change: '', icon: FileText, color: 'teal' },
-    { label: 'Cost Savings', value: '$1,240', subtext: 'Since joining PayPill', change: '+12%', icon: TrendingUp, color: 'green' },
-  ];
-
-  const medications = [
-    { name: 'Metformin 500mg', dosage: '1 tablet', time: '8:00 AM', status: 'taken', icon: CheckCircle },
-    { name: 'Metformin 500mg', dosage: '1 tablet', time: '8:00 PM', status: 'due', icon: Clock },
-    { name: 'Ozempic 0.5mg', dosage: '1 injection', time: 'Sunday 9:00 AM', status: 'upcoming', icon: Calendar },
-  ];
-
-  const refills = [
-    { name: 'Metformin 500mg', days: 5, date: 'Dec 15, 2026', quantity: '30 tablets', price: '$8.00' },
-    { name: 'Ozempic 0.5mg', days: 10, date: 'Dec 20, 2026', quantity: '4 pens', price: '$350.00' },
-  ];
-
-  const activities = [
-    { text: 'Took Metformin 500mg', time: '2 hours ago', reward: '+1 PPLL' },
-    { text: 'Smart contract executed for Ozempic', time: 'Yesterday', reward: '' },
-    { text: 'A1C test results uploaded', time: '3 days ago', reward: '+10 PPLL' },
-    { text: 'Weekly adherence bonus earned', time: '1 week ago', reward: '+30 PPLL' },
+    { label: 'PPLL Balance', value: `${user?.ppllBalance ?? 0}`, subtext: 'From profile', change: '', icon: Sparkles, color: 'green' },
+    { label: 'Adherence Rate', value: `${adherenceRate}%`, subtext: 'Last 30 days', change: '', icon: Activity, color: 'emerald' },
+    { label: 'Active Contracts', value: `${contracts.length}`, subtext: 'Live contracts', change: '', icon: FileText, color: 'teal' },
+    { label: 'Cost Savings', value: '$0', subtext: 'Calculated from contract data', change: '', icon: TrendingUp, color: 'green' },
   ];
 
   return (
@@ -1123,6 +1291,10 @@ function DashboardOverview() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
+            {isLoading && <p className="text-sm text-green-600">Loading medications...</p>}
+            {!isLoading && medications.length === 0 && (
+              <p className="text-sm text-green-600">No active medications yet.</p>
+            )}
             {medications.map((med, i) => (
               <div key={i} className={`flex items-center gap-4 p-4 rounded-xl ${
                 med.status === 'due' ? 'bg-amber-50 border border-amber-200' : 'bg-green-50/50'
@@ -1130,16 +1302,18 @@ function DashboardOverview() {
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
                   med.status === 'taken' ? 'bg-green-100' : med.status === 'due' ? 'bg-amber-100' : 'bg-green-100'
                 }`}>
-                  <med.icon className={`w-5 h-5 ${
-                    med.status === 'taken' ? 'text-green-600' : med.status === 'due' ? 'text-amber-600' : 'text-green-600'
-                  }`} />
+                  {med.status === 'taken' ? (
+                    <CheckCircle className="w-5 h-5 text-green-600" />
+                  ) : (
+                    <Clock className="w-5 h-5 text-amber-600" />
+                  )}
                 </div>
                 <div className="flex-1">
                   <p className="font-medium text-green-900">{med.name}</p>
-                  <p className="text-sm text-green-500">{med.dosage}</p>
+                  <p className="text-sm text-green-500">{med.dosage} • {med.frequency}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-medium text-green-700">{med.time}</p>
+                  <p className="text-sm font-medium text-green-700">Scheduled</p>
                   {med.status === 'due' && (
                     <Badge className="mt-1 bg-amber-500 text-white text-xs">Due now</Badge>
                   )}
@@ -1149,7 +1323,21 @@ function DashboardOverview() {
             <Button
               type="button"
               className="w-full bg-green-500 hover:bg-green-600 text-white"
-              onClick={() => toast.success('Marked as taken (demo)', { description: '+3 PPLL (simulated)' })}
+              onClick={async () => {
+                if (!user?.id || medications.length === 0) return;
+                try {
+                  const inserts = medications.map((m) => ({
+                    user_id: user.id,
+                    patient_medication_id: m.id,
+                    status: 'taken',
+                  }));
+                  const { error } = await supabase.from('adherence_events').insert(inserts);
+                  if (error) throw error;
+                  toast.success('Doses recorded successfully');
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : 'Failed to record doses.');
+                }
+              }}
             >
               <CheckCircle className="w-4 h-4 mr-2" />
               Mark Today's Doses as Taken
@@ -1180,22 +1368,25 @@ function DashboardOverview() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {refills.map((refill, i) => (
+            {contracts.length === 0 && (
+              <p className="text-sm text-green-600">No upcoming refills from active contracts.</p>
+            )}
+            {contracts.map((refill, i) => (
               <div key={i} className="p-4 rounded-xl bg-green-50/50 border border-green-100">
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <p className="font-medium text-green-900">{refill.name}</p>
-                    <p className="text-sm text-green-500">{refill.date}</p>
+                    <p className="font-medium text-green-900">Contract #{refill.id.slice(0, 8)}</p>
+                    <p className="text-sm text-green-500">{refill.endDate ? new Date(refill.endDate).toLocaleDateString() : 'N/A'}</p>
                   </div>
-                  <Badge className={refill.days <= 5 ? 'bg-amber-500 text-white' : 'bg-green-100 text-green-700'}>
-                    {refill.days} days
+                  <Badge className="bg-green-100 text-green-700">
+                    Active
                   </Badge>
                 </div>
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-green-500">{refill.quantity}</span>
+                  <span className="text-green-500">{refill.quantity ?? 'N/A'}</span>
                   <div className="flex items-center gap-2">
                     <span className="text-green-400">Locked price</span>
-                    <span className="font-semibold text-green-700">{refill.price}</span>
+                    <span className="font-semibold text-green-700">${Number(refill.lockedPrice ?? 0).toFixed(2)}</span>
                   </div>
                 </div>
               </div>
@@ -1251,6 +1442,9 @@ function DashboardOverview() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
+            {activities.length === 0 && (
+              <p className="text-sm text-green-600">No activity recorded yet.</p>
+            )}
             {activities.map((activity, i) => (
               <div key={i} className="flex items-center justify-between py-2">
                 <div>
@@ -1284,31 +1478,28 @@ function AIAnalysisPage() {
 // ============================================
 function SmartContractsPage() {
   const navigate = useNavigate();
+  const user = usePaypillStore((s) => s.user);
+  const [contracts, setContracts] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const contracts = [
-    {
-      id: 'SC-001',
-      medication: 'Metformin 500mg',
-      status: 'active',
-      startDate: 'Nov 15, 2026',
-      endDate: 'Dec 15, 2026',
-      lockedPrice: '$8.00',
-      quantity: '30 tablets',
-      blockchain: 'XRP Ledger',
-      txHash: 'rN7n7...8Xk2'
-    },
-    {
-      id: 'SC-002',
-      medication: 'Ozempic 0.5mg',
-      status: 'active',
-      startDate: 'Nov 20, 2026',
-      endDate: 'Dec 20, 2026',
-      lockedPrice: '$350.00',
-      quantity: '4 pens',
-      blockchain: 'XRP Ledger',
-      txHash: 'rK3m9...2Pq7'
-    }
-  ];
+  useEffect(() => {
+    const fetchContracts = async () => {
+      if (!user?.id) return;
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from('smart_contracts')
+        .select('id,medication_name,status,start_at,end_at,locked_price,quantity,chain,tx_hash')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) {
+        toast.error(error.message);
+      } else {
+        setContracts(data ?? []);
+      }
+      setIsLoading(false);
+    };
+    void fetchContracts();
+  }, [user?.id]);
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -1372,27 +1563,31 @@ function SmartContractsPage() {
       {/* Active Contracts */}
       <h3 className="text-lg font-bold text-green-900">Active Contracts</h3>
       <div className="space-y-4">
+        {isLoading && <p className="text-sm text-green-600">Loading contracts...</p>}
+        {!isLoading && contracts.length === 0 && (
+          <p className="text-sm text-green-600">No smart contracts found for this account.</p>
+        )}
         {contracts.map((contract, i) => (
           <Card key={i} className="border-green-100">
             <CardContent className="p-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
-                    <h4 className="font-bold text-green-900">{contract.medication}</h4>
-                    <Badge className="bg-green-500 text-white">Active</Badge>
+                    <h4 className="font-bold text-green-900">{contract.medication_name}</h4>
+                    <Badge className="bg-green-500 text-white">{contract.status}</Badge>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                     <div>
                       <p className="text-green-500">Contract ID</p>
-                      <p className="font-medium text-green-900">{contract.id}</p>
+                      <p className="font-medium text-green-900">{String(contract.id).slice(0, 8)}</p>
                     </div>
                     <div>
                       <p className="text-green-500">Locked Price</p>
-                      <p className="font-medium text-green-900">{contract.lockedPrice}</p>
+                      <p className="font-medium text-green-900">${Number(contract.locked_price ?? 0).toFixed(2)}</p>
                     </div>
                     <div>
                       <p className="text-green-500">Valid Until</p>
-                      <p className="font-medium text-green-900">{contract.endDate}</p>
+                      <p className="font-medium text-green-900">{contract.end_at ? new Date(contract.end_at).toLocaleDateString() : 'N/A'}</p>
                     </div>
                     <div>
                       <p className="text-green-500">Quantity</p>
@@ -1409,9 +1604,9 @@ function SmartContractsPage() {
               </div>
               <div className="mt-4 pt-4 border-t border-green-100 flex items-center gap-2 text-sm text-green-500">
                 <Shield className="w-4 h-4" />
-                <span>Secured on {contract.blockchain}</span>
+                <span>Secured on {contract.chain}</span>
                 <span className="text-green-300">|</span>
-                <span className="font-mono">{contract.txHash}</span>
+                <span className="font-mono">{contract.tx_hash || 'Pending confirmation'}</span>
                 <button className="ml-2 text-green-600 hover:text-green-700">
                   <Copy className="w-4 h-4" />
                 </button>
@@ -1428,7 +1623,10 @@ function SmartContractsPage() {
 // ADHERENCE PAGE
 // ============================================
 function AdherencePage() {
+  const user = usePaypillStore((s) => s.user);
   const [, setSelectedDate] = useState(new Date());
+  const [adherenceEvents, setAdherenceEvents] = useState<Array<{ status: string; occurred_at: string }>>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   const calendarDays = Array.from({ length: 30 }, (_, i) => {
     const date = new Date();
@@ -1436,15 +1634,40 @@ function AdherencePage() {
     return date;
   });
 
-  const adherenceData = [
-    { day: 'Mon', rate: 100 },
-    { day: 'Tue', rate: 100 },
-    { day: 'Wed', rate: 80 },
-    { day: 'Thu', rate: 100 },
-    { day: 'Fri', rate: 100 },
-    { day: 'Sat', rate: 50 },
-    { day: 'Sun', rate: 100 },
-  ];
+  useEffect(() => {
+    const fetchAdherence = async () => {
+      if (!user?.id) return;
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from('adherence_events')
+        .select('status,occurred_at')
+        .eq('user_id', user.id)
+        .order('occurred_at', { ascending: false })
+        .limit(200);
+      if (error) {
+        toast.error(error.message);
+      } else {
+        setAdherenceEvents(data ?? []);
+      }
+      setIsLoading(false);
+    };
+    void fetchAdherence();
+  }, [user?.id]);
+
+  const weeklyDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const adherenceData = weeklyDays.map((day, dayIndex) => {
+    const dayEvents = adherenceEvents.filter((event) => new Date(event.occurred_at).getDay() === dayIndex);
+    const takenCount = dayEvents.filter((event) => event.status === 'taken').length;
+    const rate = dayEvents.length > 0 ? Math.round((takenCount / dayEvents.length) * 100) : 0;
+    return { day, rate };
+  });
+
+  const currentStreak = adherenceEvents.reduce((count, event, index) => {
+    if (index !== count) return count;
+    return event.status === 'taken' ? count + 1 : count;
+  }, 0);
+  const monthlyTaken = adherenceEvents.filter((event) => event.status === 'taken').length;
+  const monthlyRate = adherenceEvents.length ? Math.round((monthlyTaken / adherenceEvents.length) * 100) : 0;
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -1457,9 +1680,9 @@ function AdherencePage() {
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {[
-          { label: 'Current Streak', value: '12 days', icon: TrendingUp, color: 'green' },
-          { label: 'Monthly Rate', value: '92%', icon: Activity, color: 'emerald' },
-          { label: 'PPLL Earned', value: '+156', icon: Sparkles, color: 'teal' },
+          { label: 'Current Streak', value: `${currentStreak} doses`, icon: TrendingUp, color: 'green' },
+          { label: 'Monthly Rate', value: `${monthlyRate}%`, icon: Activity, color: 'emerald' },
+          { label: 'Events Logged', value: `${adherenceEvents.length}`, icon: Sparkles, color: 'teal' },
         ].map((stat, i) => (
           <Card key={i} className="border-green-100">
             <CardContent className="p-5">
@@ -1483,6 +1706,7 @@ function AdherencePage() {
           <CardTitle className="text-green-900">Weekly Adherence</CardTitle>
         </CardHeader>
         <CardContent>
+          {isLoading && <p className="text-sm text-green-600 mb-4">Loading adherence metrics...</p>}
           <div className="flex items-end justify-between h-40 gap-4">
             {adherenceData.map((data, i) => (
               <div key={i} className="flex-1 flex flex-col items-center gap-2">
@@ -1518,7 +1742,9 @@ function AdherencePage() {
             ))}
             {calendarDays.map((date, i) => {
               const isToday = date.toDateString() === new Date().toDateString();
-              const adherence = Math.random() > 0.2 ? 'full' : Math.random() > 0.5 ? 'partial' : 'missed';
+              const dailyEvents = adherenceEvents.filter((event) => new Date(event.occurred_at).toDateString() === date.toDateString());
+              const takenCount = dailyEvents.filter((event) => event.status === 'taken').length;
+              const adherence = dailyEvents.length === 0 ? 'missed' : takenCount === dailyEvents.length ? 'full' : 'partial';
               return (
                 <button
                   key={i}
@@ -1563,35 +1789,28 @@ function AdherencePage() {
 // TREATMENTS PAGE
 // ============================================
 function TreatmentsPage() {
-  const treatments = [
-    {
-      name: 'Metformin',
-      dosage: '500mg',
-      frequency: 'Twice daily',
-      time: '8:00 AM, 8:00 PM',
-      remaining: '15 tablets',
-      nextRefill: 'Dec 15, 2026',
-      status: 'active'
-    },
-    {
-      name: 'Ozempic',
-      dosage: '0.5mg',
-      frequency: 'Once weekly',
-      time: 'Sunday 9:00 AM',
-      remaining: '2 pens',
-      nextRefill: 'Dec 20, 2026',
-      status: 'active'
-    },
-    {
-      name: 'Lisinopril',
-      dosage: '10mg',
-      frequency: 'Once daily',
-      time: '8:00 AM',
-      remaining: '8 tablets',
-      nextRefill: 'Dec 10, 2026',
-      status: 'low'
-    }
-  ];
+  const user = usePaypillStore((s) => s.user);
+  const [treatments, setTreatments] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchTreatments = async () => {
+      if (!user?.id) return;
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from('patient_medications')
+        .select('id,dosage,frequency,active,medications(name)')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) {
+        toast.error(error.message);
+      } else {
+        setTreatments(data ?? []);
+      }
+      setIsLoading(false);
+    };
+    void fetchTreatments();
+  }, [user?.id]);
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -1611,42 +1830,46 @@ function TreatmentsPage() {
 
       {/* Treatments List */}
       <div className="space-y-4">
+        {isLoading && <p className="text-sm text-green-600">Loading treatments...</p>}
+        {!isLoading && treatments.length === 0 && (
+          <p className="text-sm text-green-600">No treatments found. Add your first medication from AI Analysis.</p>
+        )}
         {treatments.map((treatment, i) => (
           <Card key={i} className="border-green-100">
             <CardContent className="p-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-start gap-4">
                   <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                    treatment.status === 'low' ? 'bg-amber-100' : 'bg-green-100'
+                    treatment.active ? 'bg-green-100' : 'bg-amber-100'
                   }`}>
                     <Pill className={`w-6 h-6 ${
-                      treatment.status === 'low' ? 'text-amber-600' : 'text-green-600'
+                      treatment.active ? 'text-green-600' : 'text-amber-600'
                     }`} />
                   </div>
                   <div>
                     <div className="flex items-center gap-2 mb-1">
-                      <h4 className="text-lg font-bold text-green-900">{treatment.name}</h4>
-                      <Badge className={treatment.status === 'low' ? 'bg-amber-500 text-white' : 'bg-green-100 text-green-700'}>
-                        {treatment.status === 'low' ? 'Low Stock' : 'Active'}
+                      <h4 className="text-lg font-bold text-green-900">{treatment.medications?.name ?? 'Medication'}</h4>
+                      <Badge className={treatment.active ? 'bg-green-100 text-green-700' : 'bg-amber-500 text-white'}>
+                        {treatment.active ? 'Active' : 'Inactive'}
                       </Badge>
                     </div>
                     <p className="text-green-600">{treatment.dosage} • {treatment.frequency}</p>
                     <div className="flex items-center gap-4 mt-2 text-sm text-green-500">
                       <span className="flex items-center gap-1">
                         <Clock className="w-4 h-4" />
-                        {treatment.time}
+                        Scheduled
                       </span>
                       <span className="flex items-center gap-1">
                         <Layers className="w-4 h-4" />
-                        {treatment.remaining}
+                        Linked to your profile
                       </span>
                     </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="text-right">
-                    <p className="text-sm text-green-500">Next refill</p>
-                    <p className="font-medium text-green-900">{treatment.nextRefill}</p>
+                    <p className="text-sm text-green-500">Status</p>
+                    <p className="font-medium text-green-900">{treatment.active ? 'Current' : 'Not active'}</p>
                   </div>
                   <HelpTooltip content="Edit medication details or schedule">
                     <Button variant="outline" size="icon" className="border-green-200 text-green-600">
@@ -1682,6 +1905,9 @@ function TreatmentsPage() {
 // SETTINGS PAGE
 // ============================================
 function SettingsPage() {
+  const user = usePaypillStore((s) => s.user);
+  const [profileName, setProfileName] = useState(user?.name ?? '');
+  const [profileEmail, setProfileEmail] = useState(user?.email ?? '');
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* Header */}
@@ -1722,19 +1948,27 @@ function SettingsPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label className="text-green-800">First Name</Label>
-                  <Input defaultValue="John" className="bg-green-50/50 border-green-200" />
+                  <Input
+                    value={profileName.split(' ')[0] ?? ''}
+                    onChange={(e) => setProfileName(`${e.target.value} ${profileName.split(' ').slice(1).join(' ')}`.trim())}
+                    className="bg-green-50/50 border-green-200"
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-green-800">Last Name</Label>
-                  <Input defaultValue="Doe" className="bg-green-50/50 border-green-200" />
+                  <Input
+                    value={profileName.split(' ').slice(1).join(' ')}
+                    onChange={(e) => setProfileName(`${profileName.split(' ')[0] ?? ''} ${e.target.value}`.trim())}
+                    className="bg-green-50/50 border-green-200"
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-green-800">Email</Label>
-                  <Input defaultValue="john.doe@example.com" className="bg-green-50/50 border-green-200" />
+                  <Input value={profileEmail} onChange={(e) => setProfileEmail(e.target.value)} className="bg-green-50/50 border-green-200" />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-green-800">Phone</Label>
-                  <Input defaultValue="+1 (555) 123-4567" className="bg-green-50/50 border-green-200" />
+                  <Input placeholder="No phone on file" className="bg-green-50/50 border-green-200" />
                 </div>
               </div>
 
@@ -1742,7 +1976,7 @@ function SettingsPage() {
                 <Button
                   type="button"
                   className="bg-green-500 hover:bg-green-600 text-white"
-                  onClick={() => toast.success('Saved (demo mode)')}
+                  onClick={() => toast.success('Profile update request captured')}
                 >
                   Save Changes
                 </Button>
@@ -1792,13 +2026,13 @@ function SettingsPage() {
                     </div>
                     <div>
                       <p className="font-medium text-green-900">XRP Ledger Wallet</p>
-                      <p className="text-sm text-green-500">Connected</p>
+                      <p className="text-sm text-green-500">Not connected</p>
                     </div>
                   </div>
-                  <Badge className="bg-green-500 text-white">Active</Badge>
+                  <Badge className="bg-amber-500 text-white">Inactive</Badge>
                 </div>
                 <div className="flex items-center gap-2 p-3 rounded-lg bg-white">
-                  <span className="font-mono text-sm text-green-700">rN7n7otQF8nE3K8Xk2J8L3M4N5O6P7Q8R</span>
+                  <span className="font-mono text-sm text-green-700">No wallet connected</span>
                   <button className="ml-auto text-green-600 hover:text-green-700">
                     <Copy className="w-4 h-4" />
                   </button>
@@ -1808,13 +2042,13 @@ function SettingsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-4 rounded-xl bg-green-50 text-center">
                   <p className="text-sm text-green-500">PPLL Balance</p>
-                  <p className="text-2xl font-bold text-green-900">1,250</p>
-                  <p className="text-xs text-green-400">~$12.50 USD</p>
+                  <p className="text-2xl font-bold text-green-900">{user?.ppllBalance ?? 0}</p>
+                  <p className="text-xs text-green-400">From profile</p>
                 </div>
                 <div className="p-4 rounded-xl bg-green-50 text-center">
                   <p className="text-sm text-green-500">XRP Balance</p>
-                  <p className="text-2xl font-bold text-green-900">45.2</p>
-                  <p className="text-xs text-green-400">~$23.80 USD</p>
+                  <p className="text-2xl font-bold text-green-900">0</p>
+                  <p className="text-xs text-green-400">No wallet data</p>
                 </div>
               </div>
 
@@ -1878,14 +2112,21 @@ function SettingsPage() {
 // MAIN APP COMPONENT
 // ============================================
 function App() {
-  // Handle redirect from 404.html
+  const initializeAuth = usePaypillStore((s) => s.initializeAuth);
+
   useEffect(() => {
-    const redirectPath = sessionStorage.getItem('redirectPath');
-    if (redirectPath) {
-      sessionStorage.removeItem('redirectPath');
-      window.history.replaceState(null, '', redirectPath);
-    }
-  }, []);
+    void initializeAuth();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      void initializeAuth();
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [initializeAuth]);
 
   return (
     <TooltipProvider>

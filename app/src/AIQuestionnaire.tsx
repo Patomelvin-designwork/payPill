@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { supabase } from '@/lib/supabase';
 
 // ============================================
 // TYPES
@@ -1261,48 +1262,54 @@ function ProcessingScreen({ onComplete }: { onComplete: () => void }) {
 // ============================================
 function ResultsScreen({ data }: { data: HealthProfile }) {
   const navigate = useNavigate();
+  const [recommendations, setRecommendations] = useState<Array<{
+    id: string;
+    medication_name: string;
+    confidence: number | null;
+    rationale: string | null;
+    estimated_monthly_savings: number | null;
+  }>>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const recommendations = [
-    {
-      rank: 1,
-      name: 'Metformin XR 1000mg',
-      type: 'Primary Treatment',
-      confidence: 94,
-      savings: '$15/month',
-      benefits: [
-        'Better glycemic control for Type 2 Diabetes',
-        'Once-daily dosing (easier to remember)',
-        'Lower risk of stomach upset vs regular',
-      ],
-      outcomes: { a1c: '-1.2%', weight: '-5 lbs' },
-    },
-    {
-      rank: 2,
-      name: 'Jardiance 10mg',
-      type: 'Add-on Therapy',
-      confidence: 89,
-      savings: '$45/month',
-      benefits: [
-        'Cardiovascular protection',
-        'Reduces risk of heart failure',
-        'Weight loss benefits',
-      ],
-      outcomes: { a1c: '-0.8%', weight: '-3 lbs' },
-    },
-    {
-      rank: 3,
-      name: 'Ozempic 1mg',
-      type: 'Alternative',
-      confidence: 87,
-      savings: '$120/month',
-      benefits: [
-        'Superior A1C reduction',
-        'Significant weight loss',
-        'Weekly injection',
-      ],
-      outcomes: { a1c: '-1.5%', weight: '-10 lbs' },
-    },
-  ];
+  useEffect(() => {
+    const loadRecommendations = async () => {
+      setIsLoading(true);
+      const { data: userResult } = await supabase.auth.getUser();
+      const userId = userResult.user?.id;
+      if (!userId) {
+        setRecommendations([]);
+        setIsLoading(false);
+        return;
+      }
+
+      const { data: latestAnalysis, error: analysisError } = await supabase
+        .from('ai_analyses')
+        .select('id')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (analysisError || !latestAnalysis) {
+        setRecommendations([]);
+        setIsLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('ai_recommendations')
+        .select('id,medication_name,confidence,rationale,estimated_monthly_savings')
+        .eq('analysis_id', latestAnalysis.id)
+        .order('confidence', { ascending: false });
+      if (error) {
+        setRecommendations([]);
+      } else {
+        setRecommendations(data ?? []);
+      }
+      setIsLoading(false);
+    };
+
+    void loadRecommendations();
+  }, []);
 
   return (
     <motion.div
@@ -1346,13 +1353,17 @@ function ResultsScreen({ data }: { data: HealthProfile }) {
               </div>
               <div className="text-center p-4 rounded-xl bg-green-50">
                 <Users className="w-6 h-6 text-green-600 mx-auto mb-2" />
-                <p className="text-2xl font-bold text-green-900">94%</p>
-                <p className="text-xs text-green-600">Profile Match</p>
+                <p className="text-2xl font-bold text-green-900">
+                  {recommendations.length > 0 ? `${Math.round(Number(recommendations[0]?.confidence ?? 0))}%` : '0%'}
+                </p>
+                <p className="text-xs text-green-600">Top confidence</p>
               </div>
               <div className="text-center p-4 rounded-xl bg-green-50">
                 <DollarSign className="w-6 h-6 text-green-600 mx-auto mb-2" />
-                <p className="text-2xl font-bold text-green-900">$1,240</p>
-                <p className="text-xs text-green-600">Est. Savings</p>
+                <p className="text-2xl font-bold text-green-900">
+                  ${recommendations.reduce((sum, item) => sum + Number(item.estimated_monthly_savings ?? 0), 0).toFixed(0)}
+                </p>
+                <p className="text-xs text-green-600">Est. monthly total</p>
               </div>
             </div>
           </CardContent>
@@ -1361,62 +1372,49 @@ function ResultsScreen({ data }: { data: HealthProfile }) {
         {/* Recommendations */}
         <div className="space-y-6">
           <h3 className="text-xl font-bold text-green-900">Top Recommendations For You:</h3>
+          {isLoading && <p className="text-sm text-green-600">Loading recommendations...</p>}
+          {!isLoading && recommendations.length === 0 && (
+            <p className="text-sm text-green-600">No saved recommendations yet.</p>
+          )}
           
           {recommendations.map((rec, index) => (
             <motion.div
-              key={rec.rank}
+              key={rec.id}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 + index * 0.1 }}
             >
-              <Card className={`border-green-100 ${rec.rank === 1 ? 'ring-2 ring-green-500' : ''}`}>
+              <Card className={`border-green-100 ${index === 0 ? 'ring-2 ring-green-500' : ''}`}>
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between mb-4">
                     <div>
                       <div className="flex items-center gap-3 mb-2">
-                        <Badge className={rec.rank === 1 ? 'bg-green-500 text-white' : 'bg-green-100 text-green-700'}>
-                          #{rec.rank} {rec.rank === 1 ? 'RECOMMENDED' : 'ALTERNATIVE'}
+                        <Badge className={index === 0 ? 'bg-green-500 text-white' : 'bg-green-100 text-green-700'}>
+                          #{index + 1} {index === 0 ? 'RECOMMENDED' : 'ALTERNATIVE'}
                         </Badge>
-                        <span className="text-sm text-green-500">{rec.type}</span>
+                        <span className="text-sm text-green-500">Persisted analysis</span>
                       </div>
-                      <h4 className="text-xl font-bold text-green-900">{rec.name}</h4>
+                      <h4 className="text-xl font-bold text-green-900">{rec.medication_name}</h4>
                     </div>
                     <div className="text-right">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-sm text-green-600">Confidence:</span>
-                        <span className="font-bold text-green-700">{rec.confidence}%</span>
+                        <span className="font-bold text-green-700">{Math.round(Number(rec.confidence ?? 0))}%</span>
                       </div>
-                      <Progress value={rec.confidence} className="w-24 h-2 bg-green-100" />
+                      <Progress value={Math.round(Number(rec.confidence ?? 0))} className="w-24 h-2 bg-green-100" />
                     </div>
                   </div>
 
                   <div className="grid md:grid-cols-2 gap-6">
                     <div>
                       <p className="font-medium text-green-800 mb-2">Why this is recommended:</p>
-                      <ul className="space-y-1">
-                        {rec.benefits.map((benefit, i) => (
-                          <li key={i} className="flex items-start gap-2 text-sm text-green-600">
-                            <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                            {benefit}
-                          </li>
-                        ))}
-                      </ul>
+                      <p className="text-sm text-green-600">{rec.rationale || 'No rationale recorded.'}</p>
                     </div>
                     <div>
-                      <p className="font-medium text-green-800 mb-2">Similar patients saw:</p>
-                      <div className="flex gap-4">
-                        <div className="p-3 rounded-lg bg-green-50">
-                          <p className="text-xs text-green-500">A1C Reduction</p>
-                          <p className="text-lg font-bold text-green-700">{rec.outcomes.a1c}</p>
-                        </div>
-                        <div className="p-3 rounded-lg bg-green-50">
-                          <p className="text-xs text-green-500">Weight Loss</p>
-                          <p className="text-lg font-bold text-green-700">{rec.outcomes.weight}</p>
-                        </div>
-                      </div>
+                      <p className="font-medium text-green-800 mb-2">Estimated monthly savings:</p>
                       <div className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200">
                         <p className="text-sm text-amber-700">
-                          💰 Potential savings: <span className="font-bold">{rec.savings}</span>
+                          Potential savings: <span className="font-bold">${Number(rec.estimated_monthly_savings ?? 0).toFixed(2)}</span>
                         </p>
                       </div>
                     </div>
