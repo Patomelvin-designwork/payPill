@@ -18,12 +18,17 @@ interface SignUpResult {
   requiresVerification: boolean;
 }
 
+export type InitializeAuthOptions = {
+  /** When true, refresh session without toggling isLoading (avoids blanking UI on tab focus / auth events). */
+  silent?: boolean;
+};
+
 interface PaypillState {
   isAuthenticated: boolean;
   isLoading: boolean;
   user: PaypillUser | null;
   onboardingComplete: boolean;
-  initializeAuth: () => Promise<void>;
+  initializeAuth: (options?: InitializeAuthOptions) => Promise<void>;
   signIn: (payload: AuthPayload) => Promise<void>;
   signUp: (payload: AuthPayload) => Promise<SignUpResult>;
   verifySignUpCode: (email: string, token: string) => Promise<void>;
@@ -59,15 +64,24 @@ export const usePaypillStore = create<PaypillState>((set) => ({
   user: null,
   onboardingComplete: false,
 
-  initializeAuth: async () => {
-    set({ isLoading: true });
+  initializeAuth: async (options) => {
+    const silent = options?.silent ?? false;
+    if (!silent) {
+      set({ isLoading: true });
+    }
+
     const {
       data: { session },
       error,
     } = await supabase.auth.getSession();
 
     if (error || !session?.user) {
-      set({ isAuthenticated: false, user: null, onboardingComplete: false, isLoading: false });
+      set({
+        isAuthenticated: false,
+        user: null,
+        onboardingComplete: false,
+        isLoading: false,
+      });
       return;
     }
 
@@ -84,7 +98,12 @@ export const usePaypillStore = create<PaypillState>((set) => ({
         isLoading: false,
       });
     } catch {
-      set({ isAuthenticated: false, user: null, onboardingComplete: false, isLoading: false });
+      set({
+        isAuthenticated: false,
+        user: null,
+        onboardingComplete: false,
+        isLoading: false,
+      });
     }
   },
 

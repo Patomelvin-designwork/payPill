@@ -1,4 +1,4 @@
-import { HashRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -2115,23 +2115,31 @@ function App() {
   const initializeAuth = usePaypillStore((s) => s.initializeAuth);
 
   useEffect(() => {
-    void initializeAuth();
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      void initializeAuth();
-    });
+    void initializeAuth()
+      .then(() => {
+        if (cancelled) return;
+        const {
+          data: { subscription },
+        } = supabase.auth.onAuthStateChange(() => {
+          // Token refresh / focus must not run the initial (non-silent) path or guards will show LoadingScreen and unmount the route tree.
+          void initializeAuth({ silent: true });
+        });
+        unsubscribe = () => subscription.unsubscribe();
+      });
 
     return () => {
-      subscription.unsubscribe();
+      cancelled = true;
+      unsubscribe?.();
     };
   }, [initializeAuth]);
 
   return (
     <TooltipProvider>
       <Toaster richColors position="top-center" />
-      <HashRouter>
+      <BrowserRouter>
         <Routes>
           {/* Public Routes */}
           <Route path="/signin" element={<GuestOnly><SignInPage /></GuestOnly>} />
@@ -2188,7 +2196,7 @@ function App() {
           <Route path="/" element={<Navigate to="/signin" replace />} />
           <Route path="*" element={<Navigate to="/signin" replace />} />
         </Routes>
-      </HashRouter>
+      </BrowserRouter>
     </TooltipProvider>
   );
 }
