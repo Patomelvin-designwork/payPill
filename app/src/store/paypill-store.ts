@@ -26,6 +26,8 @@ export type InitializeAuthOptions = {
 interface PaypillState {
   isAuthenticated: boolean;
   isLoading: boolean;
+  /** After the first auth resolution, route guards stop showing the full-page loader (StrictMode / tab refresh safe). */
+  authHydrated: boolean;
   user: PaypillUser | null;
   onboardingComplete: boolean;
   initializeAuth: (options?: InitializeAuthOptions) => Promise<void>;
@@ -61,6 +63,7 @@ async function loadProfile(userId: string, email: string, fallbackName = "New Us
 export const usePaypillStore = create<PaypillState>((set) => ({
   isAuthenticated: false,
   isLoading: true,
+  authHydrated: false,
   user: null,
   onboardingComplete: false,
 
@@ -70,40 +73,47 @@ export const usePaypillStore = create<PaypillState>((set) => ({
       set({ isLoading: true });
     }
 
-    const {
-      data: { session },
-      error,
-    } = await supabase.auth.getSession();
-
-    if (error || !session?.user) {
-      set({
-        isAuthenticated: false,
-        user: null,
-        onboardingComplete: false,
-        isLoading: false,
-      });
-      return;
-    }
-
     try {
-      const profile = await loadProfile(
-        session.user.id,
-        session.user.email || "",
-        (session.user.user_metadata?.full_name as string | undefined) || "New User"
-      );
-      set({
-        isAuthenticated: true,
-        user: profile.user,
-        onboardingComplete: profile.onboardingComplete,
-        isLoading: false,
-      });
+      const {
+        data: { session },
+        error,
+      } = await supabase.auth.getSession();
+
+      if (error || !session?.user) {
+        set({
+          isAuthenticated: false,
+          user: null,
+          onboardingComplete: false,
+        });
+        return;
+      }
+
+      try {
+        const profile = await loadProfile(
+          session.user.id,
+          session.user.email || "",
+          (session.user.user_metadata?.full_name as string | undefined) || "New User"
+        );
+        set({
+          isAuthenticated: true,
+          user: profile.user,
+          onboardingComplete: profile.onboardingComplete,
+        });
+      } catch {
+        set({
+          isAuthenticated: false,
+          user: null,
+          onboardingComplete: false,
+        });
+      }
     } catch {
       set({
         isAuthenticated: false,
         user: null,
         onboardingComplete: false,
-        isLoading: false,
       });
+    } finally {
+      set({ isLoading: false, authHydrated: true });
     }
   },
 

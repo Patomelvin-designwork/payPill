@@ -30,9 +30,9 @@ import { toast } from 'sonner';
 // ============================================
 function GuestOnly({ children }: { children: React.ReactNode }) {
   const isAuthenticated = usePaypillStore((s) => s.isAuthenticated);
-  const isLoading = usePaypillStore((s) => s.isLoading);
+  const authHydrated = usePaypillStore((s) => s.authHydrated);
   const onboardingComplete = usePaypillStore((s) => s.onboardingComplete);
-  if (isLoading) return <LoadingScreen />;
+  if (!authHydrated) return <LoadingScreen />;
   if (isAuthenticated) {
     return <Navigate to={onboardingComplete ? '/dashboard' : '/onboarding'} replace />;
   }
@@ -41,9 +41,9 @@ function GuestOnly({ children }: { children: React.ReactNode }) {
 
 function RequireDashboard({ children }: { children: React.ReactNode }) {
   const isAuthenticated = usePaypillStore((s) => s.isAuthenticated);
-  const isLoading = usePaypillStore((s) => s.isLoading);
+  const authHydrated = usePaypillStore((s) => s.authHydrated);
   const onboardingComplete = usePaypillStore((s) => s.onboardingComplete);
-  if (isLoading) return <LoadingScreen />;
+  if (!authHydrated) return <LoadingScreen />;
   if (!isAuthenticated) return <Navigate to="/signin" replace />;
   if (!onboardingComplete) return <Navigate to="/onboarding" replace />;
   return <>{children}</>;
@@ -51,9 +51,9 @@ function RequireDashboard({ children }: { children: React.ReactNode }) {
 
 function RequireOnboarding({ children }: { children: React.ReactNode }) {
   const isAuthenticated = usePaypillStore((s) => s.isAuthenticated);
-  const isLoading = usePaypillStore((s) => s.isLoading);
+  const authHydrated = usePaypillStore((s) => s.authHydrated);
   const onboardingComplete = usePaypillStore((s) => s.onboardingComplete);
-  if (isLoading) return <LoadingScreen />;
+  if (!authHydrated) return <LoadingScreen />;
   if (!isAuthenticated) return <Navigate to="/signin" replace />;
   if (onboardingComplete) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
@@ -1140,26 +1140,29 @@ function DashboardOverview() {
 
   useEffect(() => {
     const fetchDashboardData = async () => {
-      if (!user?.id) return;
+      if (!user?.id) {
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
       try {
         const [medicationsResult, contractsResult, adherenceResult] = await Promise.all([
           supabase
             .from('patient_medications')
             .select('id,dosage,frequency,medications(name)')
-            .eq('user_id', user.id)
-            .eq('active', true)
+            .eq('profile_id', user.id)
+            .eq('status', 'active')
             .limit(5),
           supabase
             .from('smart_contracts')
-            .select('id,end_at,locked_price,quantity,status')
-            .eq('user_id', user.id)
+            .select('id,end_date,locked_price,quantity,status')
+            .eq('profile_id', user.id)
             .eq('status', 'active'),
           supabase
-            .from('adherence_events')
-            .select('status,occurred_at')
-            .eq('user_id', user.id)
-            .gte('occurred_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
+            .from('medication_adherence_events')
+            .select('status,event_time')
+            .eq('profile_id', user.id)
+            .gte('event_time', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
         ]);
 
         if (medicationsResult.error) throw medicationsResult.error;
@@ -1177,7 +1180,7 @@ function DashboardOverview() {
 
         const activeContracts = (contractsResult.data ?? []).map((c: any) => ({
           id: c.id,
-          endDate: c.end_at,
+          endDate: c.end_date,
           lockedPrice: c.locked_price,
           quantity: c.quantity,
         }));
@@ -1191,7 +1194,7 @@ function DashboardOverview() {
         setActivities(
           events.slice(0, 4).map((e: any) => ({
             text: `Medication marked as ${e.status}`,
-            time: new Date(e.occurred_at).toLocaleString(),
+            time: new Date(e.event_time).toLocaleString(),
             reward: '',
           }))
         );
@@ -1327,11 +1330,11 @@ function DashboardOverview() {
                 if (!user?.id || medications.length === 0) return;
                 try {
                   const inserts = medications.map((m) => ({
-                    user_id: user.id,
+                    profile_id: user.id,
                     patient_medication_id: m.id,
-                    status: 'taken',
+                    status: 'taken' as const,
                   }));
-                  const { error } = await supabase.from('adherence_events').insert(inserts);
+                  const { error } = await supabase.from('medication_adherence_events').insert(inserts);
                   if (error) throw error;
                   toast.success('Doses recorded successfully');
                 } catch (error) {
@@ -1488,8 +1491,8 @@ function SmartContractsPage() {
       setIsLoading(true);
       const { data, error } = await supabase
         .from('smart_contracts')
-        .select('id,medication_name,status,start_at,end_at,locked_price,quantity,chain,tx_hash')
-        .eq('user_id', user.id)
+        .select('id,contract_ref,status,start_date,end_date,locked_price,quantity,blockchain,tx_hash')
+        .eq('profile_id', user.id)
         .order('created_at', { ascending: false });
       if (error) {
         toast.error(error.message);
@@ -1573,7 +1576,7 @@ function SmartContractsPage() {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
-                    <h4 className="font-bold text-green-900">{contract.medication_name}</h4>
+                    <h4 className="font-bold text-green-900">{contract.contract_ref ?? `Contract ${String(contract.id).slice(0, 8)}`}</h4>
                     <Badge className="bg-green-500 text-white">{contract.status}</Badge>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -1587,7 +1590,7 @@ function SmartContractsPage() {
                     </div>
                     <div>
                       <p className="text-green-500">Valid Until</p>
-                      <p className="font-medium text-green-900">{contract.end_at ? new Date(contract.end_at).toLocaleDateString() : 'N/A'}</p>
+                      <p className="font-medium text-green-900">{contract.end_date ? new Date(contract.end_date).toLocaleDateString() : 'N/A'}</p>
                     </div>
                     <div>
                       <p className="text-green-500">Quantity</p>
@@ -1604,7 +1607,7 @@ function SmartContractsPage() {
               </div>
               <div className="mt-4 pt-4 border-t border-green-100 flex items-center gap-2 text-sm text-green-500">
                 <Shield className="w-4 h-4" />
-                <span>Secured on {contract.chain}</span>
+                <span>Secured on {contract.blockchain ?? 'XRP Ledger'}</span>
                 <span className="text-green-300">|</span>
                 <span className="font-mono">{contract.tx_hash || 'Pending confirmation'}</span>
                 <button className="ml-2 text-green-600 hover:text-green-700">
@@ -1639,15 +1642,20 @@ function AdherencePage() {
       if (!user?.id) return;
       setIsLoading(true);
       const { data, error } = await supabase
-        .from('adherence_events')
-        .select('status,occurred_at')
-        .eq('user_id', user.id)
-        .order('occurred_at', { ascending: false })
+        .from('medication_adherence_events')
+        .select('status,event_time')
+        .eq('profile_id', user.id)
+        .order('event_time', { ascending: false })
         .limit(200);
       if (error) {
         toast.error(error.message);
       } else {
-        setAdherenceEvents(data ?? []);
+        setAdherenceEvents(
+          (data ?? []).map((row: { status: string; event_time: string }) => ({
+            status: row.status,
+            occurred_at: row.event_time,
+          }))
+        );
       }
       setIsLoading(false);
     };
@@ -1799,8 +1807,8 @@ function TreatmentsPage() {
       setIsLoading(true);
       const { data, error } = await supabase
         .from('patient_medications')
-        .select('id,dosage,frequency,active,medications(name)')
-        .eq('user_id', user.id)
+        .select('id,dosage,frequency,status,medications(name)')
+        .eq('profile_id', user.id)
         .order('created_at', { ascending: false });
       if (error) {
         toast.error(error.message);
@@ -1834,23 +1842,25 @@ function TreatmentsPage() {
         {!isLoading && treatments.length === 0 && (
           <p className="text-sm text-green-600">No treatments found. Add your first medication from AI Analysis.</p>
         )}
-        {treatments.map((treatment, i) => (
+        {treatments.map((treatment, i) => {
+          const treatmentActive = treatment.status === 'active';
+          return (
           <Card key={i} className="border-green-100">
             <CardContent className="p-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-start gap-4">
                   <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                    treatment.active ? 'bg-green-100' : 'bg-amber-100'
+                    treatmentActive ? 'bg-green-100' : 'bg-amber-100'
                   }`}>
                     <Pill className={`w-6 h-6 ${
-                      treatment.active ? 'text-green-600' : 'text-amber-600'
+                      treatmentActive ? 'text-green-600' : 'text-amber-600'
                     }`} />
                   </div>
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <h4 className="text-lg font-bold text-green-900">{treatment.medications?.name ?? 'Medication'}</h4>
-                      <Badge className={treatment.active ? 'bg-green-100 text-green-700' : 'bg-amber-500 text-white'}>
-                        {treatment.active ? 'Active' : 'Inactive'}
+                      <Badge className={treatmentActive ? 'bg-green-100 text-green-700' : 'bg-amber-500 text-white'}>
+                        {treatmentActive ? 'Active' : 'Inactive'}
                       </Badge>
                     </div>
                     <p className="text-green-600">{treatment.dosage} • {treatment.frequency}</p>
@@ -1869,7 +1879,7 @@ function TreatmentsPage() {
                 <div className="flex items-center gap-3">
                   <div className="text-right">
                     <p className="text-sm text-green-500">Status</p>
-                    <p className="font-medium text-green-900">{treatment.active ? 'Current' : 'Not active'}</p>
+                    <p className="font-medium text-green-900">{treatmentActive ? 'Current' : 'Not active'}</p>
                   </div>
                   <HelpTooltip content="Edit medication details or schedule">
                     <Button variant="outline" size="icon" className="border-green-200 text-green-600">
@@ -1880,7 +1890,8 @@ function TreatmentsPage() {
               </div>
             </CardContent>
           </Card>
-        ))}
+          );
+        })}
       </div>
 
       {/* Add Medication CTA */}

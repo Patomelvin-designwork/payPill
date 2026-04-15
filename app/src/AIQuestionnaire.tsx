@@ -1285,8 +1285,8 @@ function ResultsScreen({ data }: { data: HealthProfile }) {
       const { data: latestAnalysis, error: analysisError } = await supabase
         .from('ai_analyses')
         .select('id')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
+        .eq('profile_id', userId)
+        .order('generated_at', { ascending: false })
         .limit(1)
         .maybeSingle();
       if (analysisError || !latestAnalysis) {
@@ -1297,13 +1297,21 @@ function ResultsScreen({ data }: { data: HealthProfile }) {
 
       const { data, error } = await supabase
         .from('ai_recommendations')
-        .select('id,medication_name,confidence,rationale,estimated_monthly_savings')
+        .select('id,recommendation_text,medications(name),confidence,estimated_monthly_cost,estimated_savings')
         .eq('analysis_id', latestAnalysis.id)
         .order('confidence', { ascending: false });
       if (error) {
         setRecommendations([]);
       } else {
-        setRecommendations(data ?? []);
+        setRecommendations(
+          (data ?? []).map((row: Record<string, unknown>) => ({
+            id: row.id as string,
+            medication_name: (row.medications as { name?: string } | null)?.name ?? 'Recommendation',
+            confidence: row.confidence as number | null,
+            rationale: (row.recommendation_text as string) || null,
+            estimated_monthly_savings: (row.estimated_savings as number | null) ?? (row.estimated_monthly_cost as number | null),
+          }))
+        );
       }
       setIsLoading(false);
     };
