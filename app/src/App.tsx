@@ -22,6 +22,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import AIQuestionnaire from './AIQuestionnaire';
 import { usePaypillStore, userInitials } from '@/store/paypill-store';
 import { supabase } from '@/lib/supabase';
+import {
+  fetchPatientMedicationsDashboard,
+  fetchSmartContractsActiveDashboard,
+  fetchAdherenceLast30DaysDashboard,
+  insertAdherenceTakenForMedications,
+  fetchSmartContractsListPage,
+  fetchAdherenceEventsCalendar,
+  fetchPatientMedicationsTreatments,
+} from '@/lib/paypill-data';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 
@@ -1146,55 +1155,31 @@ function DashboardOverview() {
       }
       setIsLoading(true);
       try {
-        const [medicationsResult, contractsResult, adherenceResult] = await Promise.all([
-          supabase
-            .from('patient_medications')
-            .select('id,dosage,frequency,medications(name)')
-            .eq('profile_id', user.id)
-            .eq('status', 'active')
-            .limit(5),
-          supabase
-            .from('smart_contracts')
-            .select('id,end_date,locked_price,quantity,status')
-            .eq('profile_id', user.id)
-            .eq('status', 'active'),
-          supabase
-            .from('medication_adherence_events')
-            .select('status,event_time')
-            .eq('profile_id', user.id)
-            .gte('event_time', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
+        const sinceIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const [medRes, contractRes, adherRes] = await Promise.all([
+          fetchPatientMedicationsDashboard(supabase, user.id),
+          fetchSmartContractsActiveDashboard(supabase, user.id),
+          fetchAdherenceLast30DaysDashboard(supabase, user.id, sinceIso),
         ]);
 
-        if (medicationsResult.error) throw medicationsResult.error;
-        if (contractsResult.error) throw contractsResult.error;
-        if (adherenceResult.error) throw adherenceResult.error;
+        const errs = [medRes.error, contractRes.error, adherRes.error].filter(Boolean) as Error[];
+        if (errs.length) {
+          throw errs[0];
+        }
 
-        const meds = (medicationsResult.data ?? []).map((m: any) => ({
-          id: m.id,
-          name: m.medications?.name ?? 'Medication',
-          dosage: m.dosage,
-          frequency: m.frequency,
-          status: 'due' as const,
-        }));
-        setMedications(meds);
+        setMedications(medRes.data);
 
-        const activeContracts = (contractsResult.data ?? []).map((c: any) => ({
-          id: c.id,
-          endDate: c.end_date,
-          lockedPrice: c.locked_price,
-          quantity: c.quantity,
-        }));
-        setContracts(activeContracts);
+        setContracts(contractRes.data);
 
-        const events = adherenceResult.data ?? [];
-        const taken = events.filter((e: any) => e.status === 'taken').length;
+        const events = adherRes.data;
+        const taken = events.filter((e) => e.status === 'taken').length;
         const rate = events.length ? Math.round((taken / events.length) * 100) : 0;
         setAdherenceRate(rate);
 
         setActivities(
-          events.slice(0, 4).map((e: any) => ({
+          events.slice(0, 4).map((e) => ({
             text: `Medication marked as ${e.status}`,
-            time: new Date(e.event_time).toLocaleString(),
+            time: new Date(e.at).toLocaleString(),
             reward: '',
           }))
         );
@@ -1329,12 +1314,11 @@ function DashboardOverview() {
               onClick={async () => {
                 if (!user?.id || medications.length === 0) return;
                 try {
-                  const inserts = medications.map((m) => ({
-                    profile_id: user.id,
-                    patient_medication_id: m.id,
-                    status: 'taken' as const,
-                  }));
-                  const { error } = await supabase.from('medication_adherence_events').insert(inserts);
+                  const { error } = await insertAdherenceTakenForMedications(
+                    supabase,
+                    user.id,
+                    medications.map((m) => m.id)
+                  );
                   if (error) throw error;
                   toast.success('Doses recorded successfully');
                 } catch (error) {
@@ -1487,13 +1471,12 @@ function SmartContractsPage() {
 
   useEffect(() => {
     const fetchContracts = async () => {
-      if (!user?.id) return;
+      if (!user?.id) {
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
-      const { data, error } = await supabase
-        .from('smart_contracts')
-        .select('id,contract_ref,status,start_date,end_date,locked_price,quantity,blockchain,tx_hash')
-        .eq('profile_id', user.id)
-        .order('created_at', { ascending: false });
+      const { data, error } = await fetchSmartContractsListPage(supabase, user.id);
       if (error) {
         toast.error(error.message);
       } else {
@@ -1576,7 +1559,13 @@ function SmartContractsPage() {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
-                    <h4 className="font-bold text-green-900">{contract.contract_ref ?? `Contract ${String(contract.id).slice(0, 8)}`}</h4>
+                    <h4 className="font-bold text-green-900">
+                      {String(
+                        (contract as { medication_name?: string }).medication_name ??
+                          contract.contract_ref ??
+                          `Contract ${String(contract.id).slice(0, 8)}`
+                      )}
+                    </h4>
                     <Badge className="bg-green-500 text-white">{contract.status}</Badge>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -1590,7 +1579,9 @@ function SmartContractsPage() {
                     </div>
                     <div>
                       <p className="text-green-500">Valid Until</p>
-                      <p className="font-medium text-green-900">{contract.end_date ? new Date(contract.end_date).toLocaleDateString() : 'N/A'}</p>
+                      <p className="font-medium text-green-900">
+                        {contract.end_date ? new Date(String(contract.end_date)).toLocaleDateString() : 'N/A'}
+                      </p>
                     </div>
                     <div>
                       <p className="text-green-500">Quantity</p>
@@ -1607,7 +1598,14 @@ function SmartContractsPage() {
               </div>
               <div className="mt-4 pt-4 border-t border-green-100 flex items-center gap-2 text-sm text-green-500">
                 <Shield className="w-4 h-4" />
-                <span>Secured on {contract.blockchain ?? 'XRP Ledger'}</span>
+                <span>
+                  Secured on{' '}
+                  {String(
+                    contract.blockchain ??
+                      (contract as { chain?: string }).chain ??
+                      'XRP Ledger'
+                  )}
+                </span>
                 <span className="text-green-300">|</span>
                 <span className="font-mono">{contract.tx_hash || 'Pending confirmation'}</span>
                 <button className="ml-2 text-green-600 hover:text-green-700">
@@ -1639,23 +1637,16 @@ function AdherencePage() {
 
   useEffect(() => {
     const fetchAdherence = async () => {
-      if (!user?.id) return;
+      if (!user?.id) {
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
-      const { data, error } = await supabase
-        .from('medication_adherence_events')
-        .select('status,event_time')
-        .eq('profile_id', user.id)
-        .order('event_time', { ascending: false })
-        .limit(200);
+      const { data, error } = await fetchAdherenceEventsCalendar(supabase, user.id);
       if (error) {
         toast.error(error.message);
       } else {
-        setAdherenceEvents(
-          (data ?? []).map((row: { status: string; event_time: string }) => ({
-            status: row.status,
-            occurred_at: row.event_time,
-          }))
-        );
+        setAdherenceEvents(data);
       }
       setIsLoading(false);
     };
@@ -1803,13 +1794,12 @@ function TreatmentsPage() {
 
   useEffect(() => {
     const fetchTreatments = async () => {
-      if (!user?.id) return;
+      if (!user?.id) {
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
-      const { data, error } = await supabase
-        .from('patient_medications')
-        .select('id,dosage,frequency,status,medications(name)')
-        .eq('profile_id', user.id)
-        .order('created_at', { ascending: false });
+      const { data, error } = await fetchPatientMedicationsTreatments(supabase, user.id);
       if (error) {
         toast.error(error.message);
       } else {
