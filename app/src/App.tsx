@@ -92,6 +92,161 @@ function isSchemaMismatchError(error: unknown): boolean {
   return code === '42703' || code === '42P01' || code === 'PGRST200';
 }
 
+function errorText(error: unknown): string {
+  if (!error || typeof error !== 'object') return '';
+  const message = 'message' in error ? String((error as { message?: unknown }).message ?? '') : '';
+  const details = 'details' in error ? String((error as { details?: unknown }).details ?? '') : '';
+  return `${message} ${details}`.toLowerCase();
+}
+
+function shouldUseLegacyUserIdFallback(error: unknown): boolean {
+  const text = errorText(error);
+  return text.includes('profile_id') && text.includes('does not exist');
+}
+
+function isMissingUserIdColumn(error: unknown): boolean {
+  const text = errorText(error);
+  return text.includes('user_id') && text.includes('does not exist');
+}
+
+function errorMentionsColumn(error: unknown, column: string): boolean {
+  const t = errorText(error);
+  return t.includes(column.toLowerCase()) && t.includes('does not exist');
+}
+
+async function loadDashboardMedications(userId: string): Promise<{ rows: any[]; error: unknown | null }> {
+  let r = await supabase
+    .from('patient_medications')
+    .select('id,dosage,frequency,medications(name)')
+    .eq('profile_id', userId)
+    .eq('status', 'active')
+    .limit(5);
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  if (r.error && errorMentionsColumn(r.error, 'status')) {
+    r = await supabase
+      .from('patient_medications')
+      .select('id,dosage,frequency,medications(name)')
+      .eq('profile_id', userId)
+      .eq('active', true)
+      .limit(5);
+    if (!r.error) return { rows: r.data ?? [], error: null };
+  }
+
+  if (isSchemaMismatchError(r.error)) {
+    r = await supabase
+      .from('patient_medications')
+      .select('id,dosage,frequency')
+      .eq('profile_id', userId)
+      .eq('status', 'active')
+      .limit(5);
+    if (!r.error) return { rows: r.data ?? [], error: null };
+  }
+
+  r = await supabase
+    .from('patient_medications')
+    .select('id,dosage,frequency,medications(name)')
+    .eq('profile_id', userId)
+    .eq('active', true)
+    .limit(5);
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  r = await supabase.from('patient_medications').select('id,dosage,frequency').eq('profile_id', userId).eq('active', true).limit(5);
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  r = await supabase.from('patient_medications').select('id,dosage,frequency').eq('profile_id', userId).limit(5);
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  if (shouldUseLegacyUserIdFallback(r.error)) {
+    const legacy = await supabase
+      .from('patient_medications')
+      .select('id,dosage,frequency,medications(name),active')
+      .eq('user_id', userId)
+      .eq('active', true)
+      .limit(5);
+    if (!legacy.error) return { rows: legacy.data ?? [], error: null };
+    if (isMissingUserIdColumn(legacy.error)) {
+      const retry = await supabase.from('patient_medications').select('id,dosage,frequency').eq('profile_id', userId).limit(5);
+      if (!retry.error) return { rows: retry.data ?? [], error: null };
+      return { rows: [], error: retry.error };
+    }
+    return { rows: [], error: legacy.error };
+  }
+
+  return { rows: [], error: r.error };
+}
+
+async function loadDashboardContracts(userId: string): Promise<{ rows: any[]; error: unknown | null }> {
+  let r = await supabase
+    .from('smart_contracts')
+    .select('id,end_date,locked_price,quantity,status')
+    .eq('profile_id', userId)
+    .eq('status', 'active');
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  if (errorMentionsColumn(r.error, 'end_date')) {
+    r = await supabase
+      .from('smart_contracts')
+      .select('id,end_at,locked_price,quantity,status')
+      .eq('profile_id', userId)
+      .eq('status', 'active');
+    if (!r.error) return { rows: r.data ?? [], error: null };
+  }
+
+  r = await supabase.from('smart_contracts').select('id,end_date,locked_price,quantity,status').eq('profile_id', userId);
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  r = await supabase.from('smart_contracts').select('id,end_at,locked_price,quantity,status').eq('profile_id', userId);
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  if (shouldUseLegacyUserIdFallback(r.error)) {
+    const legacy = await supabase
+      .from('smart_contracts')
+      .select('id,end_at,locked_price,quantity,status')
+      .eq('user_id', userId)
+      .eq('status', 'active');
+    if (!legacy.error) return { rows: legacy.data ?? [], error: null };
+    if (isMissingUserIdColumn(legacy.error)) {
+      const retry = await supabase
+        .from('smart_contracts')
+        .select('id,end_date,locked_price,quantity,status')
+        .eq('profile_id', userId)
+        .eq('status', 'active');
+      if (!retry.error) return { rows: retry.data ?? [], error: null };
+      return { rows: [], error: retry.error };
+    }
+    return { rows: [], error: legacy.error };
+  }
+
+  return { rows: [], error: r.error };
+}
+
+async function loadDashboardAdherence(userId: string, sinceIso: string): Promise<{ rows: any[]; error: unknown | null }> {
+  let r = await supabase
+    .from('medication_adherence_events')
+    .select('status,event_time')
+    .eq('profile_id', userId)
+    .gte('event_time', sinceIso);
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  if (isSchemaMismatchError(r.error)) {
+    r = await supabase.from('medication_adherence_events').select('status,event_time').eq('profile_id', userId);
+    if (!r.error) return { rows: r.data ?? [], error: null };
+  }
+
+  r = await supabase
+    .from('adherence_events')
+    .select('status,occurred_at')
+    .eq('user_id', userId)
+    .gte('occurred_at', sinceIso);
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  r = await supabase.from('adherence_events').select('status,occurred_at').eq('user_id', userId);
+  if (!r.error) return { rows: r.data ?? [], error: null };
+
+  return { rows: [], error: r.error };
+}
+
 // ============================================
 // SIGN IN PAGE
 // ============================================
@@ -1347,53 +1502,15 @@ function DashboardOverview() {
         return;
       }
       setIsLoading(true);
+      const sinceIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
       try {
-        let medicationsResult: any = await supabase
-          .from('patient_medications')
-          .select('id,dosage,frequency,medications(name)')
-          .eq('profile_id', user.id)
-          .eq('status', 'active')
-          .limit(5);
-        if (isSchemaMismatchError(medicationsResult.error)) {
-          medicationsResult = await supabase
-            .from('patient_medications')
-            .select('id,dosage,frequency,medications(name),active')
-            .eq('user_id', user.id)
-            .eq('active', true)
-            .limit(5);
-        }
+        const [medWrap, contractWrap, adherWrap] = await Promise.all([
+          loadDashboardMedications(user.id),
+          loadDashboardContracts(user.id),
+          loadDashboardAdherence(user.id, sinceIso),
+        ]);
 
-        let contractsResult: any = await supabase
-          .from('smart_contracts')
-          .select('id,end_date,locked_price,quantity,status')
-          .eq('profile_id', user.id)
-          .eq('status', 'active');
-        if (isSchemaMismatchError(contractsResult.error)) {
-          contractsResult = await supabase
-            .from('smart_contracts')
-            .select('id,end_at,locked_price,quantity,status')
-            .eq('user_id', user.id)
-            .eq('status', 'active');
-        }
-
-        let adherenceResult: any = await supabase
-          .from('medication_adherence_events')
-          .select('status,event_time')
-          .eq('profile_id', user.id)
-          .gte('event_time', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
-        if (isSchemaMismatchError(adherenceResult.error)) {
-          adherenceResult = await supabase
-            .from('adherence_events')
-            .select('status,occurred_at')
-            .eq('user_id', user.id)
-            .gte('occurred_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
-        }
-
-        if (medicationsResult.error) throw medicationsResult.error;
-        if (contractsResult.error) throw contractsResult.error;
-        if (adherenceResult.error) throw adherenceResult.error;
-
-        const meds = (medicationsResult.data ?? []).map((m: any) => ({
+        const meds = (medWrap.rows ?? []).map((m: any) => ({
           id: m.id,
           name: m.medications?.name ?? 'Medication',
           dosage: m.dosage,
@@ -1402,7 +1519,7 @@ function DashboardOverview() {
         }));
         setMedications(meds);
 
-        const activeContracts = (contractsResult.data ?? []).map((c: any) => ({
+        const activeContracts = (contractWrap.rows ?? []).map((c: any) => ({
           id: c.id,
           endDate: c.end_date ?? c.end_at ?? null,
           lockedPrice: c.locked_price,
@@ -1410,7 +1527,7 @@ function DashboardOverview() {
         }));
         setContracts(activeContracts);
 
-        const events = adherenceResult.data ?? [];
+        const events = adherWrap.rows ?? [];
         const taken = events.filter((e: any) => e.status === 'taken').length;
         const rate = events.length ? Math.round((taken / events.length) * 100) : 0;
         setAdherenceRate(rate);
@@ -1422,6 +1539,14 @@ function DashboardOverview() {
             reward: '',
           }))
         );
+
+        const failures = [medWrap.error, contractWrap.error, adherWrap.error].filter(Boolean);
+        if (failures.length === 3) {
+          const first = failures[0] as { message?: string };
+          toast.error(first?.message || 'Failed to load dashboard data.');
+        } else if (failures.length > 0) {
+          toast.warning('Some dashboard data could not be loaded.');
+        }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Failed to load dashboard data.');
       } finally {
@@ -1718,14 +1843,24 @@ function SmartContractsPage() {
         .select('id,contract_ref,status,start_date,end_date,locked_price,quantity,blockchain,tx_hash')
         .eq('profile_id', user.id)
         .order('created_at', { ascending: false });
-      if (isSchemaMismatchError(error)) {
+      if (isSchemaMismatchError(error) && shouldUseLegacyUserIdFallback(error)) {
         const fallback = await supabase
           .from('smart_contracts')
           .select('id,medication_name,status,start_at,end_at,locked_price,quantity,chain,tx_hash')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false });
-        data = fallback.data;
-        error = fallback.error;
+        if (isMissingUserIdColumn(fallback.error)) {
+          const retryModern = await supabase
+            .from('smart_contracts')
+            .select('id,contract_ref,status,start_date,end_date,locked_price,quantity,blockchain,tx_hash')
+            .eq('profile_id', user.id)
+            .order('created_at', { ascending: false });
+          data = retryModern.data;
+          error = retryModern.error;
+        } else {
+          data = fallback.data;
+          error = fallback.error;
+        }
       }
       if (error) {
         toast.error(error.message);
@@ -1880,15 +2015,26 @@ function AdherencePage() {
         .eq('profile_id', user.id)
         .order('event_time', { ascending: false })
         .limit(200);
-      if (isSchemaMismatchError(error)) {
+      if (isSchemaMismatchError(error) && shouldUseLegacyUserIdFallback(error)) {
         const fallback = await supabase
           .from('adherence_events')
           .select('status,occurred_at')
           .eq('user_id', user.id)
           .order('occurred_at', { ascending: false })
           .limit(200);
-        data = fallback.data;
-        error = fallback.error;
+        if (isMissingUserIdColumn(fallback.error)) {
+          const retryModern = await supabase
+            .from('medication_adherence_events')
+            .select('status,event_time')
+            .eq('profile_id', user.id)
+            .order('event_time', { ascending: false })
+            .limit(200);
+          data = retryModern.data;
+          error = retryModern.error;
+        } else {
+          data = fallback.data;
+          error = fallback.error;
+        }
       }
       if (error) {
         toast.error(error.message);
@@ -2053,14 +2199,24 @@ function TreatmentsPage() {
         .select('id,dosage,frequency,status,medications(name)')
         .eq('profile_id', user.id)
         .order('created_at', { ascending: false });
-      if (isSchemaMismatchError(error)) {
+      if (isSchemaMismatchError(error) && shouldUseLegacyUserIdFallback(error)) {
         const fallback = await supabase
           .from('patient_medications')
           .select('id,dosage,frequency,active,medications(name)')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false });
-        data = fallback.data;
-        error = fallback.error;
+        if (isMissingUserIdColumn(fallback.error)) {
+          const retryModern = await supabase
+            .from('patient_medications')
+            .select('id,dosage,frequency,status,medications(name)')
+            .eq('profile_id', user.id)
+            .order('created_at', { ascending: false });
+          data = retryModern.data;
+          error = retryModern.error;
+        } else {
+          data = fallback.data;
+          error = fallback.error;
+        }
       }
       if (error) {
         toast.error(error.message);
