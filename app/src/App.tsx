@@ -247,6 +247,23 @@ async function loadDashboardAdherence(userId: string, sinceIso: string): Promise
   return { rows: [], error: r.error };
 }
 
+async function loadDashboardSections(
+  userId: string,
+  sinceIso: string
+): Promise<
+  [
+    { rows: any[]; error: unknown | null },
+    { rows: any[]; error: unknown | null },
+    { rows: any[]; error: unknown | null },
+  ]
+> {
+  return Promise.all([
+    loadDashboardMedications(userId),
+    loadDashboardContracts(userId),
+    loadDashboardAdherence(userId, sinceIso),
+  ]);
+}
+
 // ============================================
 // SIGN IN PAGE
 // ============================================
@@ -1504,11 +1521,24 @@ function DashboardOverview() {
       setIsLoading(true);
       const sinceIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
       try {
-        const [medWrap, contractWrap, adherWrap] = await Promise.all([
-          loadDashboardMedications(user.id),
-          loadDashboardContracts(user.id),
-          loadDashboardAdherence(user.id, sinceIso),
-        ]);
+        let {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session) {
+          await supabase.auth.refreshSession();
+          ({
+            data: { session },
+          } = await supabase.auth.getSession());
+        }
+        const effectiveUserId = session?.user?.id ?? user.id;
+
+        let [medWrap, contractWrap, adherWrap] = await loadDashboardSections(effectiveUserId, sinceIso);
+
+        const allFailed = (w: { error: unknown | null }) => Boolean(w.error);
+        if (allFailed(medWrap) && allFailed(contractWrap) && allFailed(adherWrap)) {
+          await supabase.auth.refreshSession();
+          [medWrap, contractWrap, adherWrap] = await loadDashboardSections(effectiveUserId, sinceIso);
+        }
 
         const meds = (medWrap.rows ?? []).map((m: any) => ({
           id: m.id,
@@ -1541,14 +1571,15 @@ function DashboardOverview() {
         );
 
         const failures = [medWrap.error, contractWrap.error, adherWrap.error].filter(Boolean);
-        if (failures.length === 3) {
-          const first = failures[0] as { message?: string };
-          toast.error(first?.message || 'Failed to load dashboard data.');
-        } else if (failures.length > 0) {
+        if (failures.length > 0 && failures.length < 3) {
           toast.warning('Some dashboard data could not be loaded.');
         }
+        // Full failure after retry: keep UI calm — no technical PostgREST/JWT strings in a toast on reload.
+        if (failures.length === 3) {
+          console.warn('[PayPill] dashboard metrics unavailable', failures[0]);
+        }
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Failed to load dashboard data.');
+        console.warn('[PayPill] dashboard load exception', error);
       } finally {
         setIsLoading(false);
       }
