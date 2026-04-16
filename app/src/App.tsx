@@ -22,15 +22,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import AIQuestionnaire from './AIQuestionnaire';
 import { usePaypillStore, userInitials } from '@/store/paypill-store';
 import { supabase } from '@/lib/supabase';
-import {
-  fetchPatientMedicationsDashboard,
-  fetchSmartContractsActiveDashboard,
-  fetchAdherenceLast30DaysDashboard,
-  insertAdherenceTakenForMedications,
-  fetchSmartContractsListPage,
-  fetchAdherenceEventsCalendar,
-  fetchPatientMedicationsTreatments,
-} from '@/lib/paypill-data';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 
@@ -94,6 +85,12 @@ const HelpTooltip = ({ content, children }: { content: string; children: React.R
     </Tooltip>
   </TooltipProvider>
 );
+
+function isSchemaMismatchError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? String((error as { code?: unknown }).code ?? '') : '';
+  return code === '42703' || code === '42P01' || code === 'PGRST200';
+}
 
 // ============================================
 // SIGN IN PAGE
@@ -275,7 +272,11 @@ function SignInPage() {
                     />
                     <Label htmlFor="remember" className="text-sm text-green-700 cursor-pointer">Remember me</Label>
                   </div>
-                  <button type="button" className="text-sm text-green-600 hover:text-green-700 font-medium">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/forgot-password')}
+                    className="text-sm text-green-600 hover:text-green-700 font-medium"
+                  >
                     Forgot password?
                   </button>
                 </div>
@@ -348,6 +349,198 @@ function SignInPage() {
             </CardContent>
           </Card>
         </motion.div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// PASSWORD RECOVERY PAGES
+// ============================================
+function ForgotPasswordPage() {
+  const navigate = useNavigate();
+  const requestPasswordReset = usePaypillStore((s) => s.requestPasswordReset);
+  const [email, setEmail] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [mailSent, setMailSent] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    try {
+      const redirectTo = `${window.location.origin}/reset-password`;
+      await requestPasswordReset(email, redirectTo);
+      setMailSent(true);
+      toast.success('Reset email sent. Check your inbox and spam folder.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to send reset email.';
+      toast.error(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-md">
+        <Card className="border-green-100 shadow-xl bg-white/90 backdrop-blur-sm">
+          <CardContent className="p-8 space-y-6">
+            <div className="text-center">
+              <h2 className="text-2xl font-bold text-green-900 mb-2">Reset your password</h2>
+              <p className="text-green-600">Enter your account email to receive a secure reset link.</p>
+            </div>
+
+            {mailSent ? (
+              <div className="rounded-xl border border-green-100 bg-green-50 p-4 text-sm text-green-700">
+                If an account exists for <span className="font-semibold">{email}</span>, a reset link has been sent.
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="recoveryEmail" className="text-green-800 font-medium">Email address</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-green-400" />
+                    <Input
+                      id="recoveryEmail"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="pl-11 h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400"
+                      required
+                    />
+                  </div>
+                </div>
+                <Button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="w-full h-12 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white"
+                >
+                  {isSubmitting ? 'Sending reset link...' : 'Send reset link'}
+                </Button>
+              </form>
+            )}
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate('/signin')}
+              className="w-full border-green-200 text-green-700 hover:bg-green-50"
+            >
+              Back to sign in
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function ResetPasswordPage() {
+  const navigate = useNavigate();
+  const updatePassword = usePaypillStore((s) => s.updatePassword);
+  const [nextPassword, setNextPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasRecoverySession, setHasRecoverySession] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setHasRecoverySession(Boolean(data.session?.user));
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (nextPassword.length < 8) {
+      toast.error('Password must be at least 8 characters.');
+      return;
+    }
+    if (nextPassword !== confirmPassword) {
+      toast.error('Passwords do not match.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await updatePassword(nextPassword);
+      toast.success('Password updated successfully. Please sign in.');
+      await supabase.auth.signOut();
+      navigate('/signin');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to update password.';
+      toast.error(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-md">
+        <Card className="border-green-100 shadow-xl bg-white/90 backdrop-blur-sm">
+          <CardContent className="p-8 space-y-6">
+            <div className="text-center">
+              <h2 className="text-2xl font-bold text-green-900 mb-2">Set a new password</h2>
+              <p className="text-green-600">Create a strong password for your PayPill account.</p>
+            </div>
+
+            {!hasRecoverySession && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>Recovery session not found. Open the reset link from your email again.</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="newPassword" className="text-green-800 font-medium">New password</Label>
+                <Input
+                  id="newPassword"
+                  type="password"
+                  value={nextPassword}
+                  onChange={(e) => setNextPassword(e.target.value)}
+                  placeholder="At least 8 characters"
+                  className="h-12 bg-green-50/50 border-green-200 text-green-900"
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword" className="text-green-800 font-medium">Confirm password</Label>
+                <Input
+                  id="confirmPassword"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Re-enter password"
+                  className="h-12 bg-green-50/50 border-green-200 text-green-900"
+                  required
+                />
+              </div>
+              <Button
+                type="submit"
+                disabled={!hasRecoverySession || isSubmitting}
+                className="w-full h-12 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white"
+              >
+                {isSubmitting ? 'Updating password...' : 'Update password'}
+              </Button>
+            </form>
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate('/signin')}
+              className="w-full border-green-200 text-green-700 hover:bg-green-50"
+            >
+              Back to sign in
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
@@ -1155,31 +1348,77 @@ function DashboardOverview() {
       }
       setIsLoading(true);
       try {
-        const sinceIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-        const [medRes, contractRes, adherRes] = await Promise.all([
-          fetchPatientMedicationsDashboard(supabase, user.id),
-          fetchSmartContractsActiveDashboard(supabase, user.id),
-          fetchAdherenceLast30DaysDashboard(supabase, user.id, sinceIso),
-        ]);
-
-        const errs = [medRes.error, contractRes.error, adherRes.error].filter(Boolean) as Error[];
-        if (errs.length) {
-          throw errs[0];
+        let medicationsResult: any = await supabase
+          .from('patient_medications')
+          .select('id,dosage,frequency,medications(name)')
+          .eq('profile_id', user.id)
+          .eq('status', 'active')
+          .limit(5);
+        if (isSchemaMismatchError(medicationsResult.error)) {
+          medicationsResult = await supabase
+            .from('patient_medications')
+            .select('id,dosage,frequency,medications(name),active')
+            .eq('user_id', user.id)
+            .eq('active', true)
+            .limit(5);
         }
 
-        setMedications(medRes.data);
+        let contractsResult: any = await supabase
+          .from('smart_contracts')
+          .select('id,end_date,locked_price,quantity,status')
+          .eq('profile_id', user.id)
+          .eq('status', 'active');
+        if (isSchemaMismatchError(contractsResult.error)) {
+          contractsResult = await supabase
+            .from('smart_contracts')
+            .select('id,end_at,locked_price,quantity,status')
+            .eq('user_id', user.id)
+            .eq('status', 'active');
+        }
 
-        setContracts(contractRes.data);
+        let adherenceResult: any = await supabase
+          .from('medication_adherence_events')
+          .select('status,event_time')
+          .eq('profile_id', user.id)
+          .gte('event_time', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+        if (isSchemaMismatchError(adherenceResult.error)) {
+          adherenceResult = await supabase
+            .from('adherence_events')
+            .select('status,occurred_at')
+            .eq('user_id', user.id)
+            .gte('occurred_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+        }
 
-        const events = adherRes.data;
-        const taken = events.filter((e) => e.status === 'taken').length;
+        if (medicationsResult.error) throw medicationsResult.error;
+        if (contractsResult.error) throw contractsResult.error;
+        if (adherenceResult.error) throw adherenceResult.error;
+
+        const meds = (medicationsResult.data ?? []).map((m: any) => ({
+          id: m.id,
+          name: m.medications?.name ?? 'Medication',
+          dosage: m.dosage,
+          frequency: m.frequency,
+          status: 'due' as const,
+        }));
+        setMedications(meds);
+
+        const activeContracts = (contractsResult.data ?? []).map((c: any) => ({
+          id: c.id,
+          endDate: c.end_date ?? c.end_at ?? null,
+          lockedPrice: c.locked_price,
+          quantity: c.quantity,
+        }));
+        setContracts(activeContracts);
+
+        const events = adherenceResult.data ?? [];
+        const taken = events.filter((e: any) => e.status === 'taken').length;
         const rate = events.length ? Math.round((taken / events.length) * 100) : 0;
         setAdherenceRate(rate);
 
         setActivities(
-          events.slice(0, 4).map((e) => ({
+          events.slice(0, 4).map((e: any) => ({
             text: `Medication marked as ${e.status}`,
-            time: new Date(e.at).toLocaleString(),
+            time: new Date(e.event_time ?? e.occurred_at).toLocaleString(),
             reward: '',
           }))
         );
@@ -1314,11 +1553,12 @@ function DashboardOverview() {
               onClick={async () => {
                 if (!user?.id || medications.length === 0) return;
                 try {
-                  const { error } = await insertAdherenceTakenForMedications(
-                    supabase,
-                    user.id,
-                    medications.map((m) => m.id)
-                  );
+                  const inserts = medications.map((m) => ({
+                    profile_id: user.id,
+                    patient_medication_id: m.id,
+                    status: 'taken' as const,
+                  }));
+                  const { error } = await supabase.from('medication_adherence_events').insert(inserts);
                   if (error) throw error;
                   toast.success('Doses recorded successfully');
                 } catch (error) {
@@ -1471,12 +1711,22 @@ function SmartContractsPage() {
 
   useEffect(() => {
     const fetchContracts = async () => {
-      if (!user?.id) {
-        setIsLoading(false);
-        return;
-      }
+      if (!user?.id) return;
       setIsLoading(true);
-      const { data, error } = await fetchSmartContractsListPage(supabase, user.id);
+      let { data, error }: any = await supabase
+        .from('smart_contracts')
+        .select('id,contract_ref,status,start_date,end_date,locked_price,quantity,blockchain,tx_hash')
+        .eq('profile_id', user.id)
+        .order('created_at', { ascending: false });
+      if (isSchemaMismatchError(error)) {
+        const fallback = await supabase
+          .from('smart_contracts')
+          .select('id,medication_name,status,start_at,end_at,locked_price,quantity,chain,tx_hash')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
+        data = fallback.data;
+        error = fallback.error;
+      }
       if (error) {
         toast.error(error.message);
       } else {
@@ -1559,13 +1809,7 @@ function SmartContractsPage() {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
-                    <h4 className="font-bold text-green-900">
-                      {String(
-                        (contract as { medication_name?: string }).medication_name ??
-                          contract.contract_ref ??
-                          `Contract ${String(contract.id).slice(0, 8)}`
-                      )}
-                    </h4>
+                    <h4 className="font-bold text-green-900">{contract.contract_ref ?? contract.medication_name ?? `Contract ${String(contract.id).slice(0, 8)}`}</h4>
                     <Badge className="bg-green-500 text-white">{contract.status}</Badge>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -1579,9 +1823,7 @@ function SmartContractsPage() {
                     </div>
                     <div>
                       <p className="text-green-500">Valid Until</p>
-                      <p className="font-medium text-green-900">
-                        {contract.end_date ? new Date(String(contract.end_date)).toLocaleDateString() : 'N/A'}
-                      </p>
+                      <p className="font-medium text-green-900">{(contract.end_date ?? contract.end_at) ? new Date(contract.end_date ?? contract.end_at).toLocaleDateString() : 'N/A'}</p>
                     </div>
                     <div>
                       <p className="text-green-500">Quantity</p>
@@ -1598,14 +1840,7 @@ function SmartContractsPage() {
               </div>
               <div className="mt-4 pt-4 border-t border-green-100 flex items-center gap-2 text-sm text-green-500">
                 <Shield className="w-4 h-4" />
-                <span>
-                  Secured on{' '}
-                  {String(
-                    contract.blockchain ??
-                      (contract as { chain?: string }).chain ??
-                      'XRP Ledger'
-                  )}
-                </span>
+                <span>Secured on {contract.blockchain ?? contract.chain ?? 'XRP Ledger'}</span>
                 <span className="text-green-300">|</span>
                 <span className="font-mono">{contract.tx_hash || 'Pending confirmation'}</span>
                 <button className="ml-2 text-green-600 hover:text-green-700">
@@ -1637,16 +1872,33 @@ function AdherencePage() {
 
   useEffect(() => {
     const fetchAdherence = async () => {
-      if (!user?.id) {
-        setIsLoading(false);
-        return;
-      }
+      if (!user?.id) return;
       setIsLoading(true);
-      const { data, error } = await fetchAdherenceEventsCalendar(supabase, user.id);
+      let { data, error }: any = await supabase
+        .from('medication_adherence_events')
+        .select('status,event_time')
+        .eq('profile_id', user.id)
+        .order('event_time', { ascending: false })
+        .limit(200);
+      if (isSchemaMismatchError(error)) {
+        const fallback = await supabase
+          .from('adherence_events')
+          .select('status,occurred_at')
+          .eq('user_id', user.id)
+          .order('occurred_at', { ascending: false })
+          .limit(200);
+        data = fallback.data;
+        error = fallback.error;
+      }
       if (error) {
         toast.error(error.message);
       } else {
-        setAdherenceEvents(data);
+        setAdherenceEvents(
+          (data ?? []).map((row: { status: string; event_time?: string; occurred_at?: string }) => ({
+            status: row.status,
+            occurred_at: row.event_time ?? row.occurred_at ?? new Date().toISOString(),
+          }))
+        );
       }
       setIsLoading(false);
     };
@@ -1794,12 +2046,22 @@ function TreatmentsPage() {
 
   useEffect(() => {
     const fetchTreatments = async () => {
-      if (!user?.id) {
-        setIsLoading(false);
-        return;
-      }
+      if (!user?.id) return;
       setIsLoading(true);
-      const { data, error } = await fetchPatientMedicationsTreatments(supabase, user.id);
+      let { data, error }: any = await supabase
+        .from('patient_medications')
+        .select('id,dosage,frequency,status,medications(name)')
+        .eq('profile_id', user.id)
+        .order('created_at', { ascending: false });
+      if (isSchemaMismatchError(error)) {
+        const fallback = await supabase
+          .from('patient_medications')
+          .select('id,dosage,frequency,active,medications(name)')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
+        data = fallback.data;
+        error = fallback.error;
+      }
       if (error) {
         toast.error(error.message);
       } else {
@@ -1833,7 +2095,7 @@ function TreatmentsPage() {
           <p className="text-sm text-green-600">No treatments found. Add your first medication from AI Analysis.</p>
         )}
         {treatments.map((treatment, i) => {
-          const treatmentActive = treatment.status === 'active';
+          const treatmentActive = treatment.status ? treatment.status === 'active' : Boolean(treatment.active);
           return (
           <Card key={i} className="border-green-100">
             <CardContent className="p-6">
@@ -2145,6 +2407,8 @@ function App() {
           {/* Public Routes */}
           <Route path="/signin" element={<GuestOnly><SignInPage /></GuestOnly>} />
           <Route path="/signup" element={<GuestOnly><SignUpPage /></GuestOnly>} />
+          <Route path="/forgot-password" element={<GuestOnly><ForgotPasswordPage /></GuestOnly>} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
 
           {/* Onboarding */}
           <Route path="/onboarding" element={<RequireOnboarding><OnboardingPage /></RequireOnboarding>} />

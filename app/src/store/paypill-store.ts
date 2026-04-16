@@ -34,6 +34,8 @@ interface PaypillState {
   signIn: (payload: AuthPayload) => Promise<void>;
   signUp: (payload: AuthPayload) => Promise<SignUpResult>;
   verifySignUpCode: (email: string, token: string) => Promise<void>;
+  requestPasswordReset: (email: string, redirectTo: string) => Promise<void>;
+  updatePassword: (nextPassword: string) => Promise<void>;
   signOut: () => Promise<void>;
   completeOnboarding: () => Promise<void>;
 }
@@ -237,6 +239,36 @@ export const usePaypillStore = create<PaypillState>((set) => ({
       user: profile.user,
       onboardingComplete: profile.onboardingComplete,
     });
+  },
+
+  requestPasswordReset: async (email, redirectTo) => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      throw new Error("Email is required.");
+    }
+
+    const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+      redirectTo,
+    });
+
+    if (error) {
+      throw error;
+    }
+  },
+
+  updatePassword: async (nextPassword) => {
+    const normalizedPassword = nextPassword.trim();
+    if (normalizedPassword.length < 8) {
+      throw new Error("Password must be at least 8 characters.");
+    }
+
+    const { error } = await supabase.auth.updateUser({
+      password: normalizedPassword,
+    });
+
+    if (error) {
+      throw error;
+    }
   },
 
   signOut: async () => {

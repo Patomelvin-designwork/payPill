@@ -17,7 +17,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { supabase } from '@/lib/supabase';
-import { fetchLatestAiRecommendations } from '@/lib/paypill-data';
 
 // ============================================
 // TYPES
@@ -1283,11 +1282,36 @@ function ResultsScreen({ data }: { data: HealthProfile }) {
         return;
       }
 
-      const { data, error } = await fetchLatestAiRecommendations(supabase, userId);
+      const { data: latestAnalysis, error: analysisError } = await supabase
+        .from('ai_analyses')
+        .select('id')
+        .eq('profile_id', userId)
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (analysisError || !latestAnalysis) {
+        setRecommendations([]);
+        setIsLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('ai_recommendations')
+        .select('id,recommendation_text,medications(name),confidence,estimated_monthly_cost,estimated_savings')
+        .eq('analysis_id', latestAnalysis.id)
+        .order('confidence', { ascending: false });
       if (error) {
         setRecommendations([]);
       } else {
-        setRecommendations(data);
+        setRecommendations(
+          (data ?? []).map((row: Record<string, unknown>) => ({
+            id: row.id as string,
+            medication_name: (row.medications as { name?: string } | null)?.name ?? 'Recommendation',
+            confidence: row.confidence as number | null,
+            rationale: (row.recommendation_text as string) || null,
+            estimated_monthly_savings: (row.estimated_savings as number | null) ?? (row.estimated_monthly_cost as number | null),
+          }))
+        );
       }
       setIsLoading(false);
     };
