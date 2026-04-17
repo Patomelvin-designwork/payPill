@@ -19,6 +19,13 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import AIQuestionnaire from './AIQuestionnaire';
 import { usePaypillStore, userInitials } from '@/store/paypill-store';
 import { supabase } from '@/lib/supabase';
@@ -58,6 +65,57 @@ function RequireOnboarding({ children }: { children: React.ReactNode }) {
   if (onboardingComplete) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
+
+// ISO country list with dial codes (common subset for signup phone input).
+// Sorted by name; extend freely without touching consumer logic.
+const COUNTRY_DIAL_CODES: Array<{ code: string; name: string; dial: string; flag: string }> = [
+  { code: 'NG', name: 'Nigeria', dial: '+234', flag: '🇳🇬' },
+  { code: 'US', name: 'United States', dial: '+1', flag: '🇺🇸' },
+  { code: 'CA', name: 'Canada', dial: '+1', flag: '🇨🇦' },
+  { code: 'GB', name: 'United Kingdom', dial: '+44', flag: '🇬🇧' },
+  { code: 'IE', name: 'Ireland', dial: '+353', flag: '🇮🇪' },
+  { code: 'AU', name: 'Australia', dial: '+61', flag: '🇦🇺' },
+  { code: 'NZ', name: 'New Zealand', dial: '+64', flag: '🇳🇿' },
+  { code: 'ZA', name: 'South Africa', dial: '+27', flag: '🇿🇦' },
+  { code: 'GH', name: 'Ghana', dial: '+233', flag: '🇬🇭' },
+  { code: 'KE', name: 'Kenya', dial: '+254', flag: '🇰🇪' },
+  { code: 'EG', name: 'Egypt', dial: '+20', flag: '🇪🇬' },
+  { code: 'IN', name: 'India', dial: '+91', flag: '🇮🇳' },
+  { code: 'PK', name: 'Pakistan', dial: '+92', flag: '🇵🇰' },
+  { code: 'BD', name: 'Bangladesh', dial: '+880', flag: '🇧🇩' },
+  { code: 'PH', name: 'Philippines', dial: '+63', flag: '🇵🇭' },
+  { code: 'ID', name: 'Indonesia', dial: '+62', flag: '🇮🇩' },
+  { code: 'MY', name: 'Malaysia', dial: '+60', flag: '🇲🇾' },
+  { code: 'SG', name: 'Singapore', dial: '+65', flag: '🇸🇬' },
+  { code: 'JP', name: 'Japan', dial: '+81', flag: '🇯🇵' },
+  { code: 'KR', name: 'South Korea', dial: '+82', flag: '🇰🇷' },
+  { code: 'CN', name: 'China', dial: '+86', flag: '🇨🇳' },
+  { code: 'HK', name: 'Hong Kong', dial: '+852', flag: '🇭🇰' },
+  { code: 'AE', name: 'United Arab Emirates', dial: '+971', flag: '🇦🇪' },
+  { code: 'SA', name: 'Saudi Arabia', dial: '+966', flag: '🇸🇦' },
+  { code: 'TR', name: 'Turkey', dial: '+90', flag: '🇹🇷' },
+  { code: 'DE', name: 'Germany', dial: '+49', flag: '🇩🇪' },
+  { code: 'FR', name: 'France', dial: '+33', flag: '🇫🇷' },
+  { code: 'IT', name: 'Italy', dial: '+39', flag: '🇮🇹' },
+  { code: 'ES', name: 'Spain', dial: '+34', flag: '🇪🇸' },
+  { code: 'PT', name: 'Portugal', dial: '+351', flag: '🇵🇹' },
+  { code: 'NL', name: 'Netherlands', dial: '+31', flag: '🇳🇱' },
+  { code: 'BE', name: 'Belgium', dial: '+32', flag: '🇧🇪' },
+  { code: 'CH', name: 'Switzerland', dial: '+41', flag: '🇨🇭' },
+  { code: 'SE', name: 'Sweden', dial: '+46', flag: '🇸🇪' },
+  { code: 'NO', name: 'Norway', dial: '+47', flag: '🇳🇴' },
+  { code: 'DK', name: 'Denmark', dial: '+45', flag: '🇩🇰' },
+  { code: 'FI', name: 'Finland', dial: '+358', flag: '🇫🇮' },
+  { code: 'PL', name: 'Poland', dial: '+48', flag: '🇵🇱' },
+  { code: 'RU', name: 'Russia', dial: '+7', flag: '🇷🇺' },
+  { code: 'UA', name: 'Ukraine', dial: '+380', flag: '🇺🇦' },
+  { code: 'BR', name: 'Brazil', dial: '+55', flag: '🇧🇷' },
+  { code: 'AR', name: 'Argentina', dial: '+54', flag: '🇦🇷' },
+  { code: 'MX', name: 'Mexico', dial: '+52', flag: '🇲🇽' },
+  { code: 'CL', name: 'Chile', dial: '+56', flag: '🇨🇱' },
+  { code: 'CO', name: 'Colombia', dial: '+57', flag: '🇨🇴' },
+  { code: 'PE', name: 'Peru', dial: '+51', flag: '🇵🇪' },
+];
 
 function LoadingScreen() {
   return (
@@ -109,142 +167,37 @@ function isMissingUserIdColumn(error: unknown): boolean {
   return text.includes('user_id') && text.includes('does not exist');
 }
 
-function errorMentionsColumn(error: unknown, column: string): boolean {
-  const t = errorText(error);
-  return t.includes(column.toLowerCase()) && t.includes('does not exist');
-}
-
+// Dashboard loaders: aligned with the Supabase schema defined in
+// supabase/migrations/20260413190000_paypill_core_schema.sql
+// Tables: user_medications, smart_contracts, medication_doses (all keyed by user_id).
 async function loadDashboardMedications(userId: string): Promise<{ rows: any[]; error: unknown | null }> {
-  let r = await supabase
-    .from('patient_medications')
-    .select('id,dosage,frequency,medications(name)')
-    .eq('profile_id', userId)
-    .eq('status', 'active')
+  const r = await supabase
+    .from('user_medications')
+    .select('id,name,dosage,frequency,is_active')
+    .eq('user_id', userId)
+    .eq('is_active', true)
     .limit(5);
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  if (r.error && errorMentionsColumn(r.error, 'status')) {
-    r = await supabase
-      .from('patient_medications')
-      .select('id,dosage,frequency,medications(name)')
-      .eq('profile_id', userId)
-      .eq('active', true)
-      .limit(5);
-    if (!r.error) return { rows: r.data ?? [], error: null };
-  }
-
-  if (isSchemaMismatchError(r.error)) {
-    r = await supabase
-      .from('patient_medications')
-      .select('id,dosage,frequency')
-      .eq('profile_id', userId)
-      .eq('status', 'active')
-      .limit(5);
-    if (!r.error) return { rows: r.data ?? [], error: null };
-  }
-
-  r = await supabase
-    .from('patient_medications')
-    .select('id,dosage,frequency,medications(name)')
-    .eq('profile_id', userId)
-    .eq('active', true)
-    .limit(5);
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  r = await supabase.from('patient_medications').select('id,dosage,frequency').eq('profile_id', userId).eq('active', true).limit(5);
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  r = await supabase.from('patient_medications').select('id,dosage,frequency').eq('profile_id', userId).limit(5);
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  if (shouldUseLegacyUserIdFallback(r.error)) {
-    const legacy = await supabase
-      .from('patient_medications')
-      .select('id,dosage,frequency,medications(name),active')
-      .eq('user_id', userId)
-      .eq('active', true)
-      .limit(5);
-    if (!legacy.error) return { rows: legacy.data ?? [], error: null };
-    if (isMissingUserIdColumn(legacy.error)) {
-      const retry = await supabase.from('patient_medications').select('id,dosage,frequency').eq('profile_id', userId).limit(5);
-      if (!retry.error) return { rows: retry.data ?? [], error: null };
-      return { rows: [], error: retry.error };
-    }
-    return { rows: [], error: legacy.error };
-  }
-
-  return { rows: [], error: r.error };
+  return { rows: r.data ?? [], error: r.error };
 }
 
 async function loadDashboardContracts(userId: string): Promise<{ rows: any[]; error: unknown | null }> {
-  let r = await supabase
+  const r = await supabase
     .from('smart_contracts')
-    .select('id,end_date,locked_price,quantity,status')
-    .eq('profile_id', userId)
+    .select('id,period_end,locked_price_cents,quantity_description,status')
+    .eq('user_id', userId)
     .eq('status', 'active');
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  if (errorMentionsColumn(r.error, 'end_date')) {
-    r = await supabase
-      .from('smart_contracts')
-      .select('id,end_at,locked_price,quantity,status')
-      .eq('profile_id', userId)
-      .eq('status', 'active');
-    if (!r.error) return { rows: r.data ?? [], error: null };
-  }
-
-  r = await supabase.from('smart_contracts').select('id,end_date,locked_price,quantity,status').eq('profile_id', userId);
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  r = await supabase.from('smart_contracts').select('id,end_at,locked_price,quantity,status').eq('profile_id', userId);
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  if (shouldUseLegacyUserIdFallback(r.error)) {
-    const legacy = await supabase
-      .from('smart_contracts')
-      .select('id,end_at,locked_price,quantity,status')
-      .eq('user_id', userId)
-      .eq('status', 'active');
-    if (!legacy.error) return { rows: legacy.data ?? [], error: null };
-    if (isMissingUserIdColumn(legacy.error)) {
-      const retry = await supabase
-        .from('smart_contracts')
-        .select('id,end_date,locked_price,quantity,status')
-        .eq('profile_id', userId)
-        .eq('status', 'active');
-      if (!retry.error) return { rows: retry.data ?? [], error: null };
-      return { rows: [], error: retry.error };
-    }
-    return { rows: [], error: legacy.error };
-  }
-
-  return { rows: [], error: r.error };
+  return { rows: r.data ?? [], error: r.error };
 }
 
 async function loadDashboardAdherence(userId: string, sinceIso: string): Promise<{ rows: any[]; error: unknown | null }> {
-  let r = await supabase
-    .from('medication_adherence_events')
-    .select('status,event_time')
-    .eq('profile_id', userId)
-    .gte('event_time', sinceIso);
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  if (isSchemaMismatchError(r.error)) {
-    r = await supabase.from('medication_adherence_events').select('status,event_time').eq('profile_id', userId);
-    if (!r.error) return { rows: r.data ?? [], error: null };
-  }
-
-  r = await supabase
-    .from('adherence_events')
-    .select('status,occurred_at')
+  const r = await supabase
+    .from('medication_doses')
+    .select('status,scheduled_for')
     .eq('user_id', userId)
-    .gte('occurred_at', sinceIso);
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  r = await supabase.from('adherence_events').select('status,occurred_at').eq('user_id', userId);
-  if (!r.error) return { rows: r.data ?? [], error: null };
-
-  return { rows: [], error: r.error };
+    .gte('scheduled_for', sinceIso)
+    .order('scheduled_for', { ascending: false })
+    .limit(200);
+  return { rows: r.data ?? [], error: r.error };
 }
 
 async function loadDashboardSections(
@@ -736,9 +689,17 @@ function SignUpPage() {
     password: '',
     firstName: '',
     lastName: '',
+    dobMonth: '',
+    dobDay: '',
+    dobYear: '',
+    countryCode: 'US',
+    phoneNumber: '',
     conditions: [] as string[],
     allergies: [] as string[]
   });
+
+  const selectedDial =
+    COUNTRY_DIAL_CODES.find((c) => c.code === formData.countryCode)?.dial ?? '+1';
 
   const handleContinue = async () => {
     if (step < 3) {
@@ -1044,21 +1005,99 @@ function SignUpPage() {
                   <div className="space-y-2">
                     <Label className="text-green-800 font-medium">Date of Birth</Label>
                     <div className="grid grid-cols-3 gap-2">
-                      <Input placeholder="MM" className="h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400" />
-                      <Input placeholder="DD" className="h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400" />
-                      <Input placeholder="YYYY" className="h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400" />
+                      <Input
+                        placeholder="MM"
+                        inputMode="numeric"
+                        maxLength={2}
+                        value={formData.dobMonth}
+                        onChange={(e) =>
+                          setFormData({ ...formData, dobMonth: e.target.value.replace(/\D/g, '') })
+                        }
+                        className="h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400"
+                      />
+                      <Input
+                        placeholder="DD"
+                        inputMode="numeric"
+                        maxLength={2}
+                        value={formData.dobDay}
+                        onChange={(e) =>
+                          setFormData({ ...formData, dobDay: e.target.value.replace(/\D/g, '') })
+                        }
+                        className="h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400"
+                      />
+                      <Input
+                        placeholder="YYYY"
+                        inputMode="numeric"
+                        maxLength={4}
+                        value={formData.dobYear}
+                        onChange={(e) =>
+                          setFormData({ ...formData, dobYear: e.target.value.replace(/\D/g, '') })
+                        }
+                        className="h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400"
+                      />
                     </div>
                   </div>
 
                   <div className="space-y-2">
                     <Label className="text-green-800 font-medium">Phone Number</Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-green-500 font-medium">+1</span>
+                    <div className="flex gap-2">
+                      <Select
+                        value={formData.countryCode}
+                        onValueChange={(value) =>
+                          setFormData({ ...formData, countryCode: value })
+                        }
+                      >
+                        <SelectTrigger
+                          aria-label="Country code"
+                          className="w-32 h-12 bg-green-50/50 border-green-200 text-green-900 focus:ring-green-500/20"
+                        >
+                          <SelectValue>
+                            {(() => {
+                              const c = COUNTRY_DIAL_CODES.find(
+                                (x) => x.code === formData.countryCode
+                              );
+                              return c ? (
+                                <span className="flex items-center gap-1">
+                                  <span>{c.flag}</span>
+                                  <span className="font-medium">{c.dial}</span>
+                                </span>
+                              ) : (
+                                '+1'
+                              );
+                            })()}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent className="max-h-72">
+                          {COUNTRY_DIAL_CODES.map((c) => (
+                            <SelectItem key={c.code} value={c.code}>
+                              <span className="flex items-center gap-2">
+                                <span>{c.flag}</span>
+                                <span>{c.name}</span>
+                                <span className="text-green-600">({c.dial})</span>
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                       <Input
+                        type="tel"
+                        inputMode="tel"
                         placeholder="(555) 000-0000"
-                        className="pl-12 h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400"
+                        value={formData.phoneNumber}
+                        onChange={(e) =>
+                          setFormData({ ...formData, phoneNumber: e.target.value })
+                        }
+                        className="flex-1 h-12 bg-green-50/50 border-green-200 text-green-900 placeholder:text-green-400"
                       />
                     </div>
+                    {formData.phoneNumber && (
+                      <p className="text-xs text-green-500">
+                        Will be saved as{' '}
+                        <span className="font-medium">
+                          {selectedDial} {formData.phoneNumber}
+                        </span>
+                      </p>
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -1542,7 +1581,7 @@ function DashboardOverview() {
 
         const meds = (medWrap.rows ?? []).map((m: any) => ({
           id: m.id,
-          name: m.medications?.name ?? 'Medication',
+          name: m.name ?? 'Medication',
           dosage: m.dosage,
           frequency: m.frequency,
           status: 'due' as const,
@@ -1551,9 +1590,10 @@ function DashboardOverview() {
 
         const activeContracts = (contractWrap.rows ?? []).map((c: any) => ({
           id: c.id,
-          endDate: c.end_date ?? c.end_at ?? null,
-          lockedPrice: c.locked_price,
-          quantity: c.quantity,
+          endDate: c.period_end ?? null,
+          lockedPrice:
+            typeof c.locked_price_cents === 'number' ? c.locked_price_cents / 100 : null,
+          quantity: c.quantity_description ?? null,
         }));
         setContracts(activeContracts);
 
@@ -1565,7 +1605,7 @@ function DashboardOverview() {
         setActivities(
           events.slice(0, 4).map((e: any) => ({
             text: `Medication marked as ${e.status}`,
-            time: new Date(e.event_time ?? e.occurred_at).toLocaleString(),
+            time: e.scheduled_for ? new Date(e.scheduled_for).toLocaleString() : '',
             reward: '',
           }))
         );
