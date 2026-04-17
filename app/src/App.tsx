@@ -29,6 +29,7 @@ import {
 import AIQuestionnaire from './AIQuestionnaire';
 import { usePaypillStore, userInitials } from '@/store/paypill-store';
 import { supabase } from '@/lib/supabase';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 
@@ -2689,6 +2690,7 @@ function App() {
           <Route path="*" element={<Navigate to="/signin" replace />} />
         </Routes>
       </BrowserRouter>
+      <SpeedInsights />
     </TooltipProvider>
   );
 }
