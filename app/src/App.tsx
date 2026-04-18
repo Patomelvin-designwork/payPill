@@ -985,20 +985,6 @@ function SignUpPage() {
                         type="button"
                         className="font-semibold text-green-700 underline hover:text-green-900 p-0 h-auto min-h-0 bg-transparent border-0 shadow-none cursor-pointer inline text-left"
                         onClick={() => {
-                          // #region agent log
-                          fetch('http://127.0.0.1:7259/ingest/7c275fcd-f7d5-40bd-913a-f20dfce11162', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'acc874' },
-                            body: JSON.stringify({
-                              sessionId: 'acc874',
-                              hypothesisId: 'SIGNUP_TERMS_NEW_TAB',
-                              location: 'App.tsx:SignUpPage:terms-click',
-                              message: 'Opening Terms in new tab to preserve signup form state',
-                              data: { originLen: window.location.origin.length },
-                              timestamp: Date.now(),
-                            }),
-                          }).catch(() => {});
-                          // #endregion
                           // Open in a new tab so Step 1 form state (email, password, consent) is not lost.
                           window.open(`${window.location.origin}/terms`, '_blank', 'noopener,noreferrer');
                         }}
@@ -1010,20 +996,6 @@ function SignUpPage() {
                         type="button"
                         className="font-semibold text-green-700 underline hover:text-green-900 p-0 h-auto min-h-0 bg-transparent border-0 shadow-none cursor-pointer inline text-left"
                         onClick={() => {
-                          // #region agent log
-                          fetch('http://127.0.0.1:7259/ingest/7c275fcd-f7d5-40bd-913a-f20dfce11162', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'acc874' },
-                            body: JSON.stringify({
-                              sessionId: 'acc874',
-                              hypothesisId: 'SIGNUP_HIPAA_NEW_TAB',
-                              location: 'App.tsx:SignUpPage:hipaa-click',
-                              message: 'Opening HIPAA in new tab to preserve signup form state',
-                              data: { originLen: window.location.origin.length },
-                              timestamp: Date.now(),
-                            }),
-                          }).catch(() => {});
-                          // #endregion
                           window.open(`${window.location.origin}/hipaa`, '_blank', 'noopener,noreferrer');
                         }}
                       >
