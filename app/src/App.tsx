@@ -975,9 +975,11 @@ function SignUpPage() {
                       onCheckedChange={(value) =>
                         setFormData({ ...formData, acceptedConsent: value === true })
                       }
+                      aria-label="I accept the Terms of Service and HIPAA Notice of Privacy Practices"
                       className="mt-1 border-green-300 data-[state=checked]:bg-green-500"
                     />
-                    <Label htmlFor="consent" className="text-sm font-normal leading-relaxed text-green-800">
+                    {/* Do not wrap Links in <Label htmlFor="consent"> — that captures clicks and toggles the checkbox instead of navigating. */}
+                    <div className="text-sm font-normal leading-relaxed text-green-800">
                       I acknowledge the{' '}
                       <Link to="/terms" className="font-semibold underline hover:text-green-700">
                         Terms of Service
@@ -987,7 +989,7 @@ function SignUpPage() {
                         HIPAA Notice of Privacy Practices
                       </Link>
                       , and I consent to the secure handling of my health information as described.
-                    </Label>
+                    </div>
                   </div>
                 </motion.div>
               )}
