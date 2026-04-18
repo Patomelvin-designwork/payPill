@@ -40,25 +40,54 @@ interface PaypillState {
   completeOnboarding: () => Promise<void>;
 }
 
+function profilesErrorMentionsMissingColumn(error: unknown, column: string): boolean {
+  const msg =
+    error && typeof error === "object" && "message" in error
+      ? String((error as { message?: unknown }).message).toLowerCase()
+      : "";
+  return msg.includes(column.toLowerCase()) && msg.includes("does not exist");
+}
+
 async function loadProfile(userId: string, email: string, fallbackName = "New User") {
-  const { data, error } = await supabase
+  // app/supabase/schema.sql uses onboarding_complete; core migration uses onboarding_completed_at.
+  let r = await supabase
     .from("profiles")
     .select("full_name,ppll_balance,onboarding_complete")
     .eq("id", userId)
     .single();
 
-  if (error) {
-    throw error;
+  if (r.error && profilesErrorMentionsMissingColumn(r.error, "onboarding_complete")) {
+    r = await supabase
+      .from("profiles")
+      .select("full_name,ppll_balance,onboarding_completed_at")
+      .eq("id", userId)
+      .single();
   }
+
+  if (r.error) {
+    throw r.error;
+  }
+
+  const row = r.data as {
+    full_name?: string | null;
+    ppll_balance?: number | null;
+    onboarding_complete?: boolean | null;
+    onboarding_completed_at?: string | null;
+  };
+
+  const onboardingComplete =
+    typeof row.onboarding_complete === "boolean"
+      ? row.onboarding_complete
+      : Boolean(row.onboarding_completed_at);
 
   return {
     user: {
       id: userId,
       email,
-      name: data?.full_name || fallbackName,
-      ppllBalance: data?.ppll_balance ?? 0,
+      name: row.full_name || fallbackName,
+      ppllBalance: Number(row.ppll_balance ?? 0),
     },
-    onboardingComplete: data?.onboarding_complete ?? false,
+    onboardingComplete,
   };
 }
 
@@ -285,10 +314,17 @@ export const usePaypillStore = create<PaypillState>((set) => ({
       return;
     }
 
-    const { error } = await supabase
+    let { error } = await supabase
       .from("profiles")
       .update({ onboarding_complete: true })
       .eq("id", user.id);
+
+    if (error && profilesErrorMentionsMissingColumn(error, "onboarding_complete")) {
+      ({ error } = await supabase
+        .from("profiles")
+        .update({ onboarding_completed_at: new Date().toISOString() })
+        .eq("id", user.id));
+    }
 
     if (error) {
       throw error;

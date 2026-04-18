@@ -1282,34 +1282,95 @@ function ResultsScreen({ data }: { data: HealthProfile }) {
         return;
       }
 
-      const { data: latestAnalysis, error: analysisError } = await supabase
-        .from('ai_analyses')
-        .select('id')
-        .eq('profile_id', userId)
-        .order('generated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (analysisError || !latestAnalysis) {
+      // ai_analyses owner column varies by migration (user_id vs profile_id); timestamp may be generated_at or created_at.
+      let latestAnalysis: { id: string } | null = null;
+      const analysisAttempts = [
+        () =>
+          supabase
+            .from('ai_analyses')
+            .select('id')
+            .eq('profile_id', userId)
+            .order('generated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+        () =>
+          supabase
+            .from('ai_analyses')
+            .select('id')
+            .eq('user_id', userId)
+            .order('generated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+        () =>
+          supabase
+            .from('ai_analyses')
+            .select('id')
+            .eq('profile_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+        () =>
+          supabase
+            .from('ai_analyses')
+            .select('id')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+      ];
+      for (const run of analysisAttempts) {
+        const { data, error } = await run();
+        if (!error && data?.id) {
+          latestAnalysis = data as { id: string };
+          break;
+        }
+      }
+      if (!latestAnalysis) {
         setRecommendations([]);
         setIsLoading(false);
         return;
       }
 
-      const { data, error } = await supabase
+      let recRes: any = await supabase
         .from('ai_recommendations')
         .select('id,recommendation_text,medications(name),confidence,estimated_monthly_cost,estimated_savings')
         .eq('analysis_id', latestAnalysis.id)
         .order('confidence', { ascending: false });
+      if (recRes.error) {
+        recRes = await supabase
+          .from('ai_recommendations')
+          .select('id,recommendation_text,medication_name,confidence,estimated_monthly_cost,estimated_savings')
+          .eq('analysis_id', latestAnalysis.id)
+          .order('confidence', { ascending: false });
+      }
+      if (recRes.error) {
+        recRes = await supabase
+          .from('ai_recommendations')
+          .select('id,medication_name,confidence,rationale,estimated_monthly_savings')
+          .eq('analysis_id', latestAnalysis.id)
+          .order('confidence', { ascending: false });
+      }
+      const { data, error } = recRes;
       if (error) {
         setRecommendations([]);
       } else {
         setRecommendations(
           (data ?? []).map((row: Record<string, unknown>) => ({
             id: row.id as string,
-            medication_name: (row.medications as { name?: string } | null)?.name ?? 'Recommendation',
+            medication_name:
+              (row.medications as { name?: string } | null | undefined)?.name ??
+              (row.medication_name as string | undefined) ??
+              'Recommendation',
             confidence: row.confidence as number | null,
-            rationale: (row.recommendation_text as string) || null,
-            estimated_monthly_savings: (row.estimated_savings as number | null) ?? (row.estimated_monthly_cost as number | null),
+            rationale:
+              ((row.recommendation_text as string | undefined) ||
+                (row.rationale as string | undefined) ||
+                null) as string | null,
+            estimated_monthly_savings:
+              (row.estimated_savings as number | null | undefined) ??
+              (row.estimated_monthly_savings as number | null | undefined) ??
+              (row.estimated_monthly_cost as number | null | undefined) ??
+              null,
           }))
         );
       }

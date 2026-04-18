@@ -144,29 +144,6 @@ const HelpTooltip = ({ content, children }: { content: string; children: React.R
   </TooltipProvider>
 );
 
-function isSchemaMismatchError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const code = 'code' in error ? String((error as { code?: unknown }).code ?? '') : '';
-  return code === '42703' || code === '42P01' || code === 'PGRST200';
-}
-
-function errorText(error: unknown): string {
-  if (!error || typeof error !== 'object') return '';
-  const message = 'message' in error ? String((error as { message?: unknown }).message ?? '') : '';
-  const details = 'details' in error ? String((error as { details?: unknown }).details ?? '') : '';
-  return `${message} ${details}`.toLowerCase();
-}
-
-function shouldUseLegacyUserIdFallback(error: unknown): boolean {
-  const text = errorText(error);
-  return text.includes('profile_id') && text.includes('does not exist');
-}
-
-function isMissingUserIdColumn(error: unknown): boolean {
-  const text = errorText(error);
-  return text.includes('user_id') && text.includes('does not exist');
-}
-
 // Dashboard loaders: aligned with the Supabase schema defined in
 // supabase/migrations/20260413190000_paypill_core_schema.sql
 // Tables: user_medications, smart_contracts, medication_doses (all keyed by user_id).
@@ -695,13 +672,18 @@ function SignUpPage() {
     countryCode: 'US',
     phoneNumber: '',
     conditions: [] as string[],
-    allergies: [] as string[]
+    allergies: [] as string[],
+    acceptedConsent: false,
   });
 
   const selectedDial =
     COUNTRY_DIAL_CODES.find((c) => c.code === formData.countryCode)?.dial ?? '+1';
 
   const handleContinue = async () => {
+    if (step === 1 && !formData.acceptedConsent) {
+      toast.error('Please accept the Terms of Service and HIPAA Notice of Privacy Practices to continue.');
+      return;
+    }
     if (step < 3) {
       setStep(step + 1);
     } else {
@@ -709,6 +691,22 @@ function SignUpPage() {
       try {
         const name = `${formData.firstName} ${formData.lastName}`.trim() || 'New User';
         const result = await signUp({ email: formData.email, password: formData.password, name });
+
+        // Persist consent timestamps (Epic 1 Story 1.1 / PRD F-001). Best-effort —
+        // the profile row is created by the on_auth_user_created trigger; if it
+        // is not there yet (email verification flow), the update is a no-op.
+        const consentIso = new Date().toISOString();
+        const {
+          data: { session: postSignUpSession },
+        } = await supabase.auth.getSession();
+        const postSignUpUserId = postSignUpSession?.user?.id;
+        if (postSignUpUserId) {
+          await supabase
+            .from('profiles')
+            .update({ hipaa_consent_at: consentIso, terms_accepted_at: consentIso })
+            .eq('id', postSignUpUserId);
+        }
+
         if (result.requiresVerification) {
           setVerificationEmail(formData.email.trim().toLowerCase());
           setAwaitingVerification(true);
@@ -968,6 +966,28 @@ function SignUpPage() {
                       ))}
                     </div>
                     <p className="text-xs text-green-500">Use 8+ characters with uppercase, lowercase, and numbers</p>
+                  </div>
+
+                  <div className="flex items-start gap-3 rounded-xl border border-green-100 bg-green-50/50 p-3">
+                    <Checkbox
+                      id="consent"
+                      checked={formData.acceptedConsent}
+                      onCheckedChange={(value) =>
+                        setFormData({ ...formData, acceptedConsent: value === true })
+                      }
+                      className="mt-1 border-green-300 data-[state=checked]:bg-green-500"
+                    />
+                    <Label htmlFor="consent" className="text-sm font-normal leading-relaxed text-green-800">
+                      I acknowledge the{' '}
+                      <a href="/terms" className="font-semibold underline hover:text-green-700">
+                        Terms of Service
+                      </a>{' '}
+                      and the{' '}
+                      <a href="/hipaa" className="font-semibold underline hover:text-green-700">
+                        HIPAA Notice of Privacy Practices
+                      </a>
+                      , and I consent to the secure handling of my health information as described.
+                    </Label>
                   </div>
                 </motion.div>
               )}
@@ -1628,11 +1648,22 @@ function DashboardOverview() {
     void fetchDashboardData();
   }, [user?.id]);
 
+  // PRD token economics: 1 PPLL is pegged at $0.01 USD (see PRD §Blockchain Integration).
+  const ppllBalance = user?.ppllBalance ?? 0;
+  const ppllUsdValue = ppllBalance * 0.01;
+
   const stats = [
-    { label: 'PPLL Balance', value: `${user?.ppllBalance ?? 0}`, subtext: 'From profile', change: '', icon: Sparkles, color: 'green' },
+    {
+      label: 'PPLL Balance',
+      value: `${ppllBalance.toLocaleString()}`,
+      subtext: `≈ $${ppllUsdValue.toFixed(2)} (1 PPLL = $0.01)`,
+      change: '',
+      icon: Sparkles,
+      color: 'green',
+    },
     { label: 'Adherence Rate', value: `${adherenceRate}%`, subtext: 'Last 30 days', change: '', icon: Activity, color: 'emerald' },
-    { label: 'Active Contracts', value: `${contracts.length}`, subtext: 'Live contracts', change: '', icon: FileText, color: 'teal' },
-    { label: 'Cost Savings', value: '$0', subtext: 'Calculated from contract data', change: '', icon: TrendingUp, color: 'green' },
+    { label: 'Active Contracts', value: `${contracts.length}`, subtext: 'Live smart contracts', change: '', icon: FileText, color: 'teal' },
+    { label: 'Cost Savings', value: '$0', subtext: 'vs. retail price on locked quotes', change: '', icon: TrendingUp, color: 'green' },
   ];
 
   return (
@@ -1749,12 +1780,18 @@ function DashboardOverview() {
               onClick={async () => {
                 if (!user?.id || medications.length === 0) return;
                 try {
+                  const takenAt = new Date().toISOString();
+                  const startOfDay = new Date();
+                  startOfDay.setHours(0, 0, 0, 0);
+                  const scheduledFor = startOfDay.toISOString();
                   const inserts = medications.map((m) => ({
-                    profile_id: user.id,
-                    patient_medication_id: m.id,
+                    user_id: user.id,
+                    user_medication_id: m.id,
+                    scheduled_for: scheduledFor,
                     status: 'taken' as const,
+                    taken_at: takenAt,
                   }));
-                  const { error } = await supabase.from('medication_adherence_events').insert(inserts);
+                  const { error } = await supabase.from('medication_doses').insert(inserts);
                   if (error) throw error;
                   toast.success('Doses recorded successfully');
                 } catch (error) {
@@ -1909,30 +1946,15 @@ function SmartContractsPage() {
     const fetchContracts = async () => {
       if (!user?.id) return;
       setIsLoading(true);
-      let { data, error }: any = await supabase
+      // Canonical schema: supabase/migrations/20260413190000_paypill_core_schema.sql
+      // (user_id, medication_label, period_start/period_end, locked_price_cents, quantity_description, …)
+      const { data, error }: any = await supabase
         .from('smart_contracts')
-        .select('id,contract_ref,status,start_date,end_date,locked_price,quantity,blockchain,tx_hash')
-        .eq('profile_id', user.id)
+        .select(
+          'id,medication_label,status,period_start,period_end,locked_price_cents,quantity_description,tx_hash,external_contract_ref,blockchain_network,created_at'
+        )
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
-      if (isSchemaMismatchError(error) && shouldUseLegacyUserIdFallback(error)) {
-        const fallback = await supabase
-          .from('smart_contracts')
-          .select('id,medication_name,status,start_at,end_at,locked_price,quantity,chain,tx_hash')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false });
-        if (isMissingUserIdColumn(fallback.error)) {
-          const retryModern = await supabase
-            .from('smart_contracts')
-            .select('id,contract_ref,status,start_date,end_date,locked_price,quantity,blockchain,tx_hash')
-            .eq('profile_id', user.id)
-            .order('created_at', { ascending: false });
-          data = retryModern.data;
-          error = retryModern.error;
-        } else {
-          data = fallback.data;
-          error = fallback.error;
-        }
-      }
       if (error) {
         toast.error(error.message);
       } else {
@@ -2009,13 +2031,30 @@ function SmartContractsPage() {
         {!isLoading && contracts.length === 0 && (
           <p className="text-sm text-green-600">No smart contracts found for this account.</p>
         )}
-        {contracts.map((contract, i) => (
+        {contracts.map((contract, i) => {
+          const lockedUsd =
+            typeof contract.locked_price_cents === 'number'
+              ? contract.locked_price_cents / 100
+              : Number(contract.locked_price ?? 0);
+          const validUntil =
+            contract.period_end ?? contract.end_date ?? contract.end_at ?? null;
+          const displayName =
+            contract.external_contract_ref ??
+            contract.medication_label ??
+            contract.medication_name ??
+            contract.contract_ref ??
+            `Contract ${String(contract.id).slice(0, 8)}`;
+          const qty =
+            contract.quantity_description ?? contract.quantity ?? '—';
+          const chainLabel =
+            contract.blockchain_network ?? contract.blockchain ?? contract.chain ?? 'XRP Ledger';
+          return (
           <Card key={i} className="border-green-100">
             <CardContent className="p-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
-                    <h4 className="font-bold text-green-900">{contract.contract_ref ?? contract.medication_name ?? `Contract ${String(contract.id).slice(0, 8)}`}</h4>
+                    <h4 className="font-bold text-green-900">{displayName}</h4>
                     <Badge className="bg-green-500 text-white">{contract.status}</Badge>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -2025,15 +2064,17 @@ function SmartContractsPage() {
                     </div>
                     <div>
                       <p className="text-green-500">Locked Price</p>
-                      <p className="font-medium text-green-900">${Number(contract.locked_price ?? 0).toFixed(2)}</p>
+                      <p className="font-medium text-green-900">${lockedUsd.toFixed(2)}</p>
                     </div>
                     <div>
                       <p className="text-green-500">Valid Until</p>
-                      <p className="font-medium text-green-900">{(contract.end_date ?? contract.end_at) ? new Date(contract.end_date ?? contract.end_at).toLocaleDateString() : 'N/A'}</p>
+                      <p className="font-medium text-green-900">
+                        {validUntil ? new Date(validUntil).toLocaleDateString() : 'N/A'}
+                      </p>
                     </div>
                     <div>
                       <p className="text-green-500">Quantity</p>
-                      <p className="font-medium text-green-900">{contract.quantity}</p>
+                      <p className="font-medium text-green-900">{qty}</p>
                     </div>
                   </div>
                 </div>
@@ -2046,7 +2087,7 @@ function SmartContractsPage() {
               </div>
               <div className="mt-4 pt-4 border-t border-green-100 flex items-center gap-2 text-sm text-green-500">
                 <Shield className="w-4 h-4" />
-                <span>Secured on {contract.blockchain ?? contract.chain ?? 'XRP Ledger'}</span>
+                <span>Secured on {chainLabel}</span>
                 <span className="text-green-300">|</span>
                 <span className="font-mono">{contract.tx_hash || 'Pending confirmation'}</span>
                 <button className="ml-2 text-green-600 hover:text-green-700">
@@ -2055,7 +2096,8 @@ function SmartContractsPage() {
               </div>
             </CardContent>
           </Card>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -2080,40 +2122,19 @@ function AdherencePage() {
     const fetchAdherence = async () => {
       if (!user?.id) return;
       setIsLoading(true);
-      let { data, error }: any = await supabase
-        .from('medication_adherence_events')
-        .select('status,event_time')
-        .eq('profile_id', user.id)
-        .order('event_time', { ascending: false })
+      const { data, error }: any = await supabase
+        .from('medication_doses')
+        .select('status,scheduled_for,taken_at')
+        .eq('user_id', user.id)
+        .order('scheduled_for', { ascending: false })
         .limit(200);
-      if (isSchemaMismatchError(error) && shouldUseLegacyUserIdFallback(error)) {
-        const fallback = await supabase
-          .from('adherence_events')
-          .select('status,occurred_at')
-          .eq('user_id', user.id)
-          .order('occurred_at', { ascending: false })
-          .limit(200);
-        if (isMissingUserIdColumn(fallback.error)) {
-          const retryModern = await supabase
-            .from('medication_adherence_events')
-            .select('status,event_time')
-            .eq('profile_id', user.id)
-            .order('event_time', { ascending: false })
-            .limit(200);
-          data = retryModern.data;
-          error = retryModern.error;
-        } else {
-          data = fallback.data;
-          error = fallback.error;
-        }
-      }
       if (error) {
         toast.error(error.message);
       } else {
         setAdherenceEvents(
-          (data ?? []).map((row: { status: string; event_time?: string; occurred_at?: string }) => ({
+          (data ?? []).map((row: { status: string; scheduled_for?: string; taken_at?: string | null }) => ({
             status: row.status,
-            occurred_at: row.event_time ?? row.occurred_at ?? new Date().toISOString(),
+            occurred_at: row.taken_at ?? row.scheduled_for ?? new Date().toISOString(),
           }))
         );
       }
@@ -2265,30 +2286,12 @@ function TreatmentsPage() {
     const fetchTreatments = async () => {
       if (!user?.id) return;
       setIsLoading(true);
-      let { data, error }: any = await supabase
-        .from('patient_medications')
-        .select('id,dosage,frequency,status,medications(name)')
-        .eq('profile_id', user.id)
+      // Canonical: public.user_medications (user_id, name, dosage, frequency, is_active)
+      const { data, error }: any = await supabase
+        .from('user_medications')
+        .select('id,name,dosage,frequency,is_active,created_at')
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
-      if (isSchemaMismatchError(error) && shouldUseLegacyUserIdFallback(error)) {
-        const fallback = await supabase
-          .from('patient_medications')
-          .select('id,dosage,frequency,active,medications(name)')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false });
-        if (isMissingUserIdColumn(fallback.error)) {
-          const retryModern = await supabase
-            .from('patient_medications')
-            .select('id,dosage,frequency,status,medications(name)')
-            .eq('profile_id', user.id)
-            .order('created_at', { ascending: false });
-          data = retryModern.data;
-          error = retryModern.error;
-        } else {
-          data = fallback.data;
-          error = fallback.error;
-        }
-      }
       if (error) {
         toast.error(error.message);
       } else {
@@ -2322,7 +2325,11 @@ function TreatmentsPage() {
           <p className="text-sm text-green-600">No treatments found. Add your first medication from AI Analysis.</p>
         )}
         {treatments.map((treatment, i) => {
-          const treatmentActive = treatment.status ? treatment.status === 'active' : Boolean(treatment.active);
+          const treatmentActive =
+            typeof treatment.is_active === 'boolean'
+              ? treatment.is_active
+              : treatment.status === 'active' || Boolean(treatment.active);
+          const medName = treatment.name ?? treatment.medications?.name ?? 'Medication';
           return (
           <Card key={i} className="border-green-100">
             <CardContent className="p-6">
@@ -2337,7 +2344,7 @@ function TreatmentsPage() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2 mb-1">
-                      <h4 className="text-lg font-bold text-green-900">{treatment.medications?.name ?? 'Medication'}</h4>
+                      <h4 className="text-lg font-bold text-green-900">{medName}</h4>
                       <Badge className={treatmentActive ? 'bg-green-100 text-green-700' : 'bg-amber-500 text-white'}>
                         {treatmentActive ? 'Active' : 'Inactive'}
                       </Badge>
@@ -2394,10 +2401,107 @@ function TreatmentsPage() {
 // ============================================
 // SETTINGS PAGE
 // ============================================
+// 2025 U.S. Federal Poverty Level thresholds (HHS, 48 contiguous states & DC).
+// Used for PRD Epic 3 Story 3.2 Foundation Support eligibility screening.
+const FPL_BASE_2025_USD = 15060;
+const FPL_PER_PERSON_2025_USD = 5380;
+
+function calculateFplPercent(
+  annualIncomeUsd: number | null,
+  householdSize: number | null
+): number | null {
+  if (!annualIncomeUsd || annualIncomeUsd <= 0) return null;
+  const size = householdSize && householdSize > 0 ? householdSize : 1;
+  const threshold = FPL_BASE_2025_USD + FPL_PER_PERSON_2025_USD * (size - 1);
+  return Math.round((annualIncomeUsd / threshold) * 100);
+}
+
 function SettingsPage() {
   const user = usePaypillStore((s) => s.user);
   const [profileName, setProfileName] = useState(user?.name ?? '');
   const [profileEmail, setProfileEmail] = useState(user?.email ?? '');
+
+  // Coverage state (PRD Epic 1 Story 1.2 + Epic 3 Story 3.2)
+  const [insuranceName, setInsuranceName] = useState('');
+  const [insurancePlanType, setInsurancePlanType] = useState('');
+  const [insuranceMemberId, setInsuranceMemberId] = useState('');
+  const [insuranceGroupNumber, setInsuranceGroupNumber] = useState('');
+  const [annualIncomeUsd, setAnnualIncomeUsd] = useState('');
+  const [householdSize, setHouseholdSize] = useState('1');
+  const [foundationSupportRequested, setFoundationSupportRequested] = useState(false);
+  const [isLoadingCoverage, setIsLoadingCoverage] = useState(true);
+  const [isSavingCoverage, setIsSavingCoverage] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      if (!user?.id) {
+        setIsLoadingCoverage(false);
+        return;
+      }
+      const { data, error } = await supabase
+        .from('patient_profile')
+        .select(
+          'insurance_name,insurance_plan_type,insurance_member_id,insurance_group_number,annual_income_usd,household_size,foundation_support_requested'
+        )
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (!error && data) {
+        setInsuranceName(data.insurance_name ?? '');
+        setInsurancePlanType(data.insurance_plan_type ?? '');
+        setInsuranceMemberId(data.insurance_member_id ?? '');
+        setInsuranceGroupNumber(data.insurance_group_number ?? '');
+        setAnnualIncomeUsd(
+          typeof data.annual_income_usd === 'number' ? String(data.annual_income_usd) : ''
+        );
+        setHouseholdSize(
+          typeof data.household_size === 'number' && data.household_size > 0
+            ? String(data.household_size)
+            : '1'
+        );
+        setFoundationSupportRequested(Boolean(data.foundation_support_requested));
+      }
+      setIsLoadingCoverage(false);
+    };
+    void load();
+  }, [user?.id]);
+
+  const fplPercent = calculateFplPercent(
+    annualIncomeUsd ? Number(annualIncomeUsd) : null,
+    householdSize ? Number(householdSize) : null
+  );
+  const foundationEligible = fplPercent !== null && fplPercent <= 250;
+
+  const saveCoverage = async () => {
+    if (!user?.id) {
+      toast.error('You must be signed in to update coverage.');
+      return;
+    }
+    setIsSavingCoverage(true);
+    try {
+      const payload = {
+        user_id: user.id,
+        insurance_name: insuranceName.trim() || null,
+        insurance_plan_type: insurancePlanType.trim() || null,
+        insurance_member_id: insuranceMemberId.trim() || null,
+        insurance_group_number: insuranceGroupNumber.trim() || null,
+        annual_income_usd: annualIncomeUsd ? Number(annualIncomeUsd) : null,
+        household_size: householdSize ? Number(householdSize) : null,
+        foundation_support_requested: foundationSupportRequested,
+        foundation_support_requested_at: foundationSupportRequested ? new Date().toISOString() : null,
+      };
+      const { error } = await supabase
+        .from('patient_profile')
+        .upsert(payload, { onConflict: 'user_id' });
+      if (error) throw error;
+      toast.success('Coverage information saved.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save coverage.';
+      toast.error(message);
+    } finally {
+      setIsSavingCoverage(false);
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* Header */}
@@ -2409,6 +2513,7 @@ function SettingsPage() {
       <Tabs defaultValue="profile" className="w-full">
         <TabsList className="bg-green-50 border border-green-100">
           <TabsTrigger value="profile" className="data-[state=active]:bg-white data-[state=active]:text-green-700">Profile</TabsTrigger>
+          <TabsTrigger value="coverage" className="data-[state=active]:bg-white data-[state=active]:text-green-700">Coverage</TabsTrigger>
           <TabsTrigger value="notifications" className="data-[state=active]:bg-white data-[state=active]:text-green-700">Notifications</TabsTrigger>
           <TabsTrigger value="wallet" className="data-[state=active]:bg-white data-[state=active]:text-green-700">Wallet</TabsTrigger>
           <TabsTrigger value="privacy" className="data-[state=active]:bg-white data-[state=active]:text-green-700">Privacy</TabsTrigger>
@@ -2473,6 +2578,168 @@ function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="coverage" className="mt-6 space-y-6">
+          {/* Insurance — PRD Epic 1 Story 1.2 / F-002 */}
+          <Card className="border-green-100">
+            <CardHeader>
+              <CardTitle className="text-green-900 flex items-center gap-2">
+                <Shield className="w-5 h-5 text-green-500" />
+                Insurance Information
+              </CardTitle>
+              <CardDescription>
+                Enter your coverage so PayPill can verify eligibility and calculate your out-of-pocket
+                cost. Supports Medicare, Medicaid, and commercial insurance.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {isLoadingCoverage ? (
+                <p className="text-sm text-green-600">Loading your coverage…</p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-green-800">Insurance carrier</Label>
+                      <Input
+                        value={insuranceName}
+                        onChange={(e) => setInsuranceName(e.target.value)}
+                        placeholder="e.g. Blue Cross Blue Shield"
+                        className="bg-green-50/50 border-green-200"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-green-800">Plan type</Label>
+                      <Select value={insurancePlanType || 'unspecified'} onValueChange={(v) => setInsurancePlanType(v === 'unspecified' ? '' : v)}>
+                        <SelectTrigger className="bg-green-50/50 border-green-200 text-green-900">
+                          <SelectValue placeholder="Select plan type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="unspecified">Not specified</SelectItem>
+                          <SelectItem value="commercial">Commercial (HMO/PPO/EPO)</SelectItem>
+                          <SelectItem value="medicare">Medicare</SelectItem>
+                          <SelectItem value="medicare_advantage">Medicare Advantage</SelectItem>
+                          <SelectItem value="medicaid">Medicaid</SelectItem>
+                          <SelectItem value="marketplace">ACA Marketplace</SelectItem>
+                          <SelectItem value="uninsured">Uninsured</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-green-800">Member ID</Label>
+                      <Input
+                        value={insuranceMemberId}
+                        onChange={(e) => setInsuranceMemberId(e.target.value)}
+                        placeholder="Member ID from your insurance card"
+                        className="bg-green-50/50 border-green-200"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-green-800">Group number</Label>
+                      <Input
+                        value={insuranceGroupNumber}
+                        onChange={(e) => setInsuranceGroupNumber(e.target.value)}
+                        placeholder="Group number (if applicable)"
+                        className="bg-green-50/50 border-green-200"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-green-500">
+                    Encrypted at rest and in transit. PayPill is HIPAA-compliant and never sells your
+                    data.
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Foundation Support — PRD Epic 3 Story 3.2 */}
+          <Card className="border-green-100">
+            <CardHeader>
+              <CardTitle className="text-green-900 flex items-center gap-2">
+                <Heart className="w-5 h-5 text-green-500" />
+                PayPill Foundation support
+              </CardTitle>
+              <CardDescription>
+                If cost is a barrier, the PayPill Foundation funds medications for qualifying
+                patients — 10% of our profits go directly to this program. Screening uses the U.S.
+                Federal Poverty Level (FPL); patients at or below 250% FPL typically qualify.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-green-800">Annual household income (USD)</Label>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    value={annualIncomeUsd}
+                    onChange={(e) => setAnnualIncomeUsd(e.target.value.replace(/[^0-9]/g, ''))}
+                    placeholder="e.g. 42000"
+                    className="bg-green-50/50 border-green-200"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-green-800">Household size</Label>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={20}
+                    value={householdSize}
+                    onChange={(e) => setHouseholdSize(e.target.value.replace(/[^0-9]/g, ''))}
+                    placeholder="1"
+                    className="bg-green-50/50 border-green-200"
+                  />
+                </div>
+              </div>
+
+              {fplPercent !== null && (
+                <div
+                  className={`rounded-xl border p-4 ${
+                    foundationEligible
+                      ? 'border-green-200 bg-green-50'
+                      : 'border-amber-200 bg-amber-50'
+                  }`}
+                >
+                  <p className="text-sm font-medium text-green-900">
+                    Your household is at approximately{' '}
+                    <span className="font-bold">{fplPercent}% of the Federal Poverty Level</span>.
+                  </p>
+                  <p className="text-xs text-green-600 mt-1">
+                    {foundationEligible
+                      ? 'You likely qualify for Foundation-funded medication support ($0 out-of-pocket for eligible drugs). Request screening below.'
+                      : 'You are above the 250% FPL cutoff today, but PayPill still locks in transparent NADAC-based pricing on every quote.'}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-start gap-3 pt-2">
+                <Checkbox
+                  id="foundation-support"
+                  checked={foundationSupportRequested}
+                  onCheckedChange={(v) => setFoundationSupportRequested(v === true)}
+                  className="mt-1 border-green-300 data-[state=checked]:bg-green-500"
+                />
+                <Label htmlFor="foundation-support" className="text-sm font-normal text-green-800 leading-relaxed">
+                  Request a Foundation support screening. A care navigator will review your income
+                  and insurance status within 48 hours (PRD Epic 3.2 acceptance criteria).
+                </Label>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              onClick={saveCoverage}
+              disabled={isSavingCoverage || isLoadingCoverage}
+              className="bg-green-500 hover:bg-green-600 text-white"
+            >
+              {isSavingCoverage ? 'Saving…' : 'Save coverage'}
+            </Button>
+          </div>
         </TabsContent>
 
         <TabsContent value="notifications" className="mt-6">
