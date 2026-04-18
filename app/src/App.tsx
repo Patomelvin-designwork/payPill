@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -979,13 +979,13 @@ function SignUpPage() {
                     />
                     <Label htmlFor="consent" className="text-sm font-normal leading-relaxed text-green-800">
                       I acknowledge the{' '}
-                      <a href="/terms" className="font-semibold underline hover:text-green-700">
+                      <Link to="/terms" className="font-semibold underline hover:text-green-700">
                         Terms of Service
-                      </a>{' '}
+                      </Link>{' '}
                       and the{' '}
-                      <a href="/hipaa" className="font-semibold underline hover:text-green-700">
+                      <Link to="/hipaa" className="font-semibold underline hover:text-green-700">
                         HIPAA Notice of Privacy Practices
-                      </a>
+                      </Link>
                       , and I consent to the secure handling of my health information as described.
                     </Label>
                   </div>
@@ -2866,6 +2866,78 @@ function SettingsPage() {
 }
 
 // ============================================
+// PUBLIC LEGAL PAGES (signup consent links)
+// ============================================
+function TermsOfServicePage() {
+  const navigate = useNavigate();
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 p-6">
+      <div className="max-w-2xl mx-auto">
+        <Card className="border-green-100 shadow-lg">
+          <CardHeader>
+            <CardTitle className="text-green-900">Terms of Service</CardTitle>
+            <CardDescription>PayPill — summary placeholder</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm text-green-800 leading-relaxed">
+            <p>
+              This page is a <strong>placeholder</strong> for your final Terms of Service. Replace this
+              content with counsel-approved legal text before production launch.
+            </p>
+            <p>
+              By using PayPill you agree to use the service only for lawful purposes, to provide accurate
+              health and coverage information where requested, and to keep your account credentials secure.
+            </p>
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="outline" className="border-green-200 text-green-700" onClick={() => navigate(-1)}>
+                Back
+              </Button>
+              <Button type="button" className="bg-green-500 hover:bg-green-600 text-white" onClick={() => navigate('/signup')}>
+                Return to signup
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function HipaaNoticePage() {
+  const navigate = useNavigate();
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 p-6">
+      <div className="max-w-2xl mx-auto">
+        <Card className="border-green-100 shadow-lg">
+          <CardHeader>
+            <CardTitle className="text-green-900">HIPAA Notice of Privacy Practices</CardTitle>
+            <CardDescription>PayPill — summary placeholder</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm text-green-800 leading-relaxed">
+            <p>
+              This page is a <strong>placeholder</strong> for your HIPAA Notice of Privacy Practices (NPP).
+              Replace with your organization&apos;s official NPP, including permitted uses and disclosures of
+              PHI, individual rights, and contact information for your Privacy Officer.
+            </p>
+            <p>
+              PayPill is designed so health information you enter is used to provide medication transparency,
+              pricing, and adherence features you request. Do not include unnecessary sensitive information.
+            </p>
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="outline" className="border-green-200 text-green-700" onClick={() => navigate(-1)}>
+                Back
+              </Button>
+              <Button type="button" className="bg-green-500 hover:bg-green-600 text-white" onClick={() => navigate('/signup')}>
+                Return to signup
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // MAIN APP COMPONENT
 // ============================================
 function App() {
@@ -2903,6 +2975,8 @@ function App() {
           <Route path="/signup" element={<GuestOnly><SignUpPage /></GuestOnly>} />
           <Route path="/forgot-password" element={<GuestOnly><ForgotPasswordPage /></GuestOnly>} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/terms" element={<TermsOfServicePage />} />
+          <Route path="/hipaa" element={<HipaaNoticePage />} />
 
           {/* Onboarding */}
           <Route path="/onboarding" element={<RequireOnboarding><OnboardingPage /></RequireOnboarding>} />
