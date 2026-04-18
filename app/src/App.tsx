@@ -679,17 +679,74 @@ function SignUpPage() {
   const selectedDial =
     COUNTRY_DIAL_CODES.find((c) => c.code === formData.countryCode)?.dial ?? '+1';
 
-  /** New tab preserves signup form state; if pop-ups are blocked, `window.open` is null — fall back to in-app navigation. */
+  /** Prefer a new tab (keeps signup state). If blocked, `window.open` may be null or a immediately-closed window — fall back in-app. */
   const openLegalDoc = (path: '/terms' | '/hipaa') => {
+    // #region agent log
+    const _agentLog = (
+      message: string,
+      data: Record<string, unknown>,
+      hypothesisId: string,
+      runId: string = 'legal-doc-debug-1'
+    ) => {
+      void fetch('http://127.0.0.1:7259/ingest/7c275fcd-f7d5-40bd-913a-f20dfce11162', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'acc874' },
+        body: JSON.stringify({
+          sessionId: 'acc874',
+          location: 'App.tsx:SignUpPage.openLegalDoc',
+          message,
+          data,
+          timestamp: Date.now(),
+          hypothesisId,
+          runId,
+        }),
+      }).catch(() => {});
+    };
+    // #endregion
     const url = `${window.location.origin}${path}`;
-    const win = window.open(url, '_blank', 'noopener,noreferrer');
-    if (win == null) {
+    _agentLog('openLegalDoc entry', { path }, 'H4');
+
+    let didFallback = false;
+    const runFallback = (reason: string) => {
+      if (didFallback) {
+        _agentLog('runFallback skipped (already)', { path, reason }, 'H2', 'legal-doc-verify');
+        return;
+      }
+      didFallback = true;
+      _agentLog('runFallback', { path, reason }, 'H1', 'legal-doc-verify');
       toast.warning(
         'Pop-up blocked by your browser. Opening the document in this tab — use the browser Back button to return to signup.',
         { duration: 9000 }
       );
       navigate(path);
+      _agentLog('navigate after fallback', { path, reason }, 'H2', 'legal-doc-verify');
+    };
+
+    let win: Window | null = null;
+    try {
+      win = window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      _agentLog('window.open threw', { path, err: String(e) }, 'H3');
+      runFallback('open-threw');
+      return;
     }
+    _agentLog(
+      'after window.open (sync)',
+      { path, winIsNull: win === null, winClosed: win?.closed },
+      'H1'
+    );
+    if (win == null || win.closed) {
+      runFallback(win == null ? 'win-null' : 'win-closed-sync');
+      return;
+    }
+    queueMicrotask(() => {
+      _agentLog('after window.open (microtask)', { path, winClosed: win.closed }, 'H1');
+      if (win.closed) {
+        runFallback('win-closed-microtask');
+      } else {
+        _agentLog('new tab assumed open', { path }, 'H1');
+      }
+    });
   };
 
   const handleContinue = async () => {
@@ -2893,6 +2950,23 @@ function SettingsPage() {
 // ============================================
 function TermsOfServicePage() {
   const navigate = useNavigate();
+  // #region agent log
+  useEffect(() => {
+    void fetch('http://127.0.0.1:7259/ingest/7c275fcd-f7d5-40bd-913a-f20dfce11162', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'acc874' },
+      body: JSON.stringify({
+        sessionId: 'acc874',
+        location: 'App.tsx:TermsOfServicePage',
+        message: 'legal page mounted',
+        data: {},
+        timestamp: Date.now(),
+        hypothesisId: 'H6',
+        runId: 'legal-doc-debug-1',
+      }),
+    }).catch(() => {});
+  }, []);
+  // #endregion
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 p-6">
       <div className="max-w-2xl mx-auto">
@@ -2927,6 +3001,23 @@ function TermsOfServicePage() {
 
 function HipaaNoticePage() {
   const navigate = useNavigate();
+  // #region agent log
+  useEffect(() => {
+    void fetch('http://127.0.0.1:7259/ingest/7c275fcd-f7d5-40bd-913a-f20dfce11162', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'acc874' },
+      body: JSON.stringify({
+        sessionId: 'acc874',
+        location: 'App.tsx:HipaaNoticePage',
+        message: 'legal page mounted',
+        data: {},
+        timestamp: Date.now(),
+        hypothesisId: 'H6',
+        runId: 'legal-doc-debug-1',
+      }),
+    }).catch(() => {});
+  }, []);
+  // #endregion
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 p-6">
       <div className="max-w-2xl mx-auto">
