@@ -679,6 +679,19 @@ function SignUpPage() {
   const selectedDial =
     COUNTRY_DIAL_CODES.find((c) => c.code === formData.countryCode)?.dial ?? '+1';
 
+  /** New tab preserves signup form state; if pop-ups are blocked, `window.open` is null — fall back to in-app navigation. */
+  const openLegalDoc = (path: '/terms' | '/hipaa') => {
+    const url = `${window.location.origin}${path}`;
+    const win = window.open(url, '_blank', 'noopener,noreferrer');
+    if (win == null) {
+      toast.warning(
+        'Pop-up blocked by your browser. Opening the document in this tab — use the browser Back button to return to signup.',
+        { duration: 9000 }
+      );
+      navigate(path);
+    }
+  };
+
   const handleContinue = async () => {
     if (step === 1 && !formData.acceptedConsent) {
       toast.error('Please accept the Terms of Service and HIPAA Notice of Privacy Practices to continue.');
@@ -984,10 +997,7 @@ function SignUpPage() {
                       <button
                         type="button"
                         className="font-semibold text-green-700 underline hover:text-green-900 p-0 h-auto min-h-0 bg-transparent border-0 shadow-none cursor-pointer inline text-left"
-                        onClick={() => {
-                          // Open in a new tab so Step 1 form state (email, password, consent) is not lost.
-                          window.open(`${window.location.origin}/terms`, '_blank', 'noopener,noreferrer');
-                        }}
+                        onClick={() => openLegalDoc('/terms')}
                       >
                         Terms of Service
                       </button>{' '}
@@ -995,9 +1005,7 @@ function SignUpPage() {
                       <button
                         type="button"
                         className="font-semibold text-green-700 underline hover:text-green-900 p-0 h-auto min-h-0 bg-transparent border-0 shadow-none cursor-pointer inline text-left"
-                        onClick={() => {
-                          window.open(`${window.location.origin}/hipaa`, '_blank', 'noopener,noreferrer');
-                        }}
+                        onClick={() => openLegalDoc('/hipaa')}
                       >
                         HIPAA Notice of Privacy Practices
                       </button>
