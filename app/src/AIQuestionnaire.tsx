@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -10,6 +10,7 @@ import {
   Stethoscope, Camera, Loader2,
   Award, Users, DollarSign, Lock
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,6 +18,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { supabase } from '@/lib/supabase';
+import type { PostgrestError } from '@supabase/supabase-js';
 
 // ============================================
 // TYPES
@@ -52,6 +54,8 @@ interface HealthProfile {
   }>;
   allergies: Array<{
     allergen: string;
+    /** UI tag (drug / food / other) when capturing from questionnaire chips */
+    type?: string;
     severity: string;
     reaction: string;
   }>;
@@ -68,6 +72,59 @@ interface HealthProfile {
     insurance: string;
     planType: string;
   };
+}
+
+type QuestionnaireDraft = Partial<HealthProfile>;
+type ModulePropsBase = { data: QuestionnaireDraft; onUpdate: (d: QuestionnaireDraft) => void };
+
+type ConditionEntry = HealthProfile['conditions'][number];
+type MedicationEntry = HealthProfile['medications'][number];
+type AllergyEntry = HealthProfile['allergies'][number];
+
+function computeBodyBmi(height: string, weight: string): number {
+  const heightInM = parseFloat(height) * 0.0254;
+  const weightInKg = parseFloat(weight) * 0.453592;
+  if (heightInM && weightInKg) {
+    return parseFloat((weightInKg / (heightInM * heightInM)).toFixed(1));
+  }
+  return 0;
+}
+
+type LifestyleSliderOption = { value: string; label: string; emoji?: string };
+
+type LifestyleSliderControlProps = {
+  label: string;
+  value: string;
+  options: LifestyleSliderOption[];
+  onChange: (v: string) => void;
+  icon: LucideIcon;
+};
+
+function LifestyleSliderControl({ label, value, options, onChange, icon: Icon }: LifestyleSliderControlProps) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Icon className="w-5 h-5 text-green-600" />
+        <Label className="text-green-800 font-medium">{label}</Label>
+      </div>
+      <div className="flex gap-2">
+        {options.map((option) => (
+          <button
+            key={option.value}
+            onClick={() => onChange(option.value)}
+            className={`flex-1 py-2 px-1 rounded-lg text-xs font-medium transition-all ${
+              value === option.value
+                ? 'bg-green-500 text-white'
+                : 'bg-green-50 text-green-600 hover:bg-green-100'
+            }`}
+          >
+            {option.emoji && <span className="block text-lg mb-1">{option.emoji}</span>}
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // ============================================
@@ -174,11 +231,20 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
 // ============================================
 // IDENTITY MODULE
 // ============================================
-function IdentityModule({ data, onUpdate, onNext }: { data: any; onUpdate: (d: any) => void; onNext: () => void }) {
-  const [localData, setLocalData] = useState(data.identity || {});
+function IdentityModule({ data, onUpdate, onNext }: ModulePropsBase & { onNext: () => void }) {
+  const [localData, setLocalData] = useState<Partial<HealthProfile['identity']>>(data.identity ?? {});
 
   const handleNext = () => {
-    onUpdate({ ...data, identity: localData });
+    onUpdate({
+      ...data,
+      identity: {
+        firstName: localData.firstName ?? '',
+        lastName: localData.lastName ?? '',
+        dob: localData.dob ?? '',
+        gender: localData.gender ?? '',
+        location: localData.location ?? '',
+      },
+    });
     onNext();
   };
 
@@ -274,25 +340,16 @@ function IdentityModule({ data, onUpdate, onNext }: { data: any; onUpdate: (d: a
 // ============================================
 // BODY METRICS MODULE
 // ============================================
-function BodyMetricsModule({ data, onUpdate, onNext, onBack }: { data: any; onUpdate: (d: any) => void; onNext: () => void; onBack: () => void }) {
+function BodyMetricsModule({ data, onUpdate, onNext, onBack }: ModulePropsBase & { onNext: () => void; onBack: () => void }) {
   const [localData, setLocalData] = useState(data.body || { height: '', weight: '', bmi: 0, bloodPressure: { systolic: '', diastolic: '' }, heartRate: '' });
 
-  const calculateBMI = () => {
-    const heightInM = parseFloat(localData.height) * 0.0254;
-    const weightInKg = parseFloat(localData.weight) * 0.453592;
-    if (heightInM && weightInKg) {
-      return (weightInKg / (heightInM * heightInM)).toFixed(1);
-    }
-    return 0;
-  };
-
-  useEffect(() => {
-    const bmi = calculateBMI();
-    setLocalData((prev: any) => ({ ...prev, bmi }));
-  }, [localData.height, localData.weight]);
+  const bmi = useMemo(
+    () => computeBodyBmi(localData.height, localData.weight),
+    [localData.height, localData.weight]
+  );
 
   const handleNext = () => {
-    onUpdate({ ...data, body: localData });
+    onUpdate({ ...data, body: { ...localData, bmi } });
     onNext();
   };
 
@@ -353,7 +410,7 @@ function BodyMetricsModule({ data, onUpdate, onNext, onBack }: { data: any; onUp
       </div>
 
       {/* BMI Display */}
-      {localData.bmi > 0 && (
+      {bmi > 0 && (
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -362,17 +419,17 @@ function BodyMetricsModule({ data, onUpdate, onNext, onBack }: { data: any; onUp
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-green-600">Your BMI</p>
-              <p className={`text-3xl font-bold ${getBMIColor(localData.bmi)}`}>{localData.bmi}</p>
+              <p className={`text-3xl font-bold ${getBMIColor(bmi)}`}>{bmi}</p>
             </div>
-            <Badge className={`${getBMIColor(localData.bmi).replace('text-', 'bg-').replace('500', '100')} ${getBMIColor(localData.bmi)}`}>
-              {getBMILabel(localData.bmi)}
+            <Badge className={`${getBMIColor(bmi).replace('text-', 'bg-').replace('500', '100')} ${getBMIColor(bmi)}`}>
+              {getBMILabel(bmi)}
             </Badge>
           </div>
           <div className="mt-3 h-2 bg-green-200 rounded-full overflow-hidden">
             <motion.div
               initial={{ width: 0 }}
-              animate={{ width: `${Math.min((localData.bmi / 40) * 100, 100)}%` }}
-              className={`h-full ${getBMIColor(localData.bmi).replace('text-', 'bg-')}`}
+              animate={{ width: `${Math.min((bmi / 40) * 100, 100)}%` }}
+              className={`h-full ${getBMIColor(bmi).replace('text-', 'bg-')}`}
             />
           </div>
         </motion.div>
@@ -437,23 +494,29 @@ function BodyMetricsModule({ data, onUpdate, onNext, onBack }: { data: any; onUp
 // ============================================
 // CONDITIONS MODULE (BODY MAP)
 // ============================================
-function ConditionsModule({ data, onUpdate, onNext, onBack }: { data: any; onUpdate: (d: any) => void; onNext: () => void; onBack: () => void }) {
+function ConditionsModule({ data, onUpdate, onNext, onBack }: ModulePropsBase & { onNext: () => void; onBack: () => void }) {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
-  const [selectedConditions, setSelectedConditions] = useState(data.conditions || []);
+  const [selectedConditions, setSelectedConditions] = useState<ConditionEntry[]>(data.conditions || []);
+  const conditionIdRef = useRef(0);
 
   const toggleCondition = (condition: string, systemId: string) => {
-    const exists = selectedConditions.find((c: any) => c.name === condition);
+    const exists = selectedConditions.find((c) => c.name === condition);
     if (exists) {
-      setSelectedConditions(selectedConditions.filter((c: any) => c.name !== condition));
+      setSelectedConditions(selectedConditions.filter((c) => c.name !== condition));
     } else {
-      setSelectedConditions([...selectedConditions, { id: Date.now().toString(), name: condition, category: systemId, diagnosedDate: '', treatment: '', controlled: '' }]);
+      conditionIdRef.current += 1;
+      const id = `c-${conditionIdRef.current}`;
+      setSelectedConditions([
+        ...selectedConditions,
+        { id, name: condition, category: systemId, diagnosedDate: '', treatment: '', controlled: '' },
+      ]);
     }
   };
 
   const updateConditionDetail = (name: string, field: string, value: string) => {
-    setSelectedConditions(selectedConditions.map((c: any) => 
-      c.name === name ? { ...c, [field]: value } : c
-    ));
+    setSelectedConditions(
+      selectedConditions.map((c) => (c.name === name ? { ...c, [field]: value } : c))
+    );
   };
 
   const handleNext = () => {
@@ -480,7 +543,7 @@ function ConditionsModule({ data, onUpdate, onNext, onBack }: { data: any; onUpd
       {selectedConditions.length > 0 && (
         <div className="flex flex-wrap gap-2 p-3 rounded-xl bg-green-50 border border-green-200">
           <span className="text-sm text-green-600 w-full mb-1">Selected:</span>
-          {selectedConditions.map((c: any) => (
+          {selectedConditions.map((c) => (
             <Badge key={c.name} className="bg-green-500 text-white pl-2 pr-1 py-1">
               {c.name}
               <button onClick={() => toggleCondition(c.name, c.category)} className="ml-1 p-0.5 hover:bg-green-600 rounded">
@@ -495,7 +558,7 @@ function ConditionsModule({ data, onUpdate, onNext, onBack }: { data: any; onUpd
       <div className="grid grid-cols-2 gap-3">
         {bodySystems.map((system) => {
           const Icon = system.icon;
-          const hasSelected = selectedConditions.some((c: any) => c.category === system.id);
+          const hasSelected = selectedConditions.some((c) => c.category === system.id);
           return (
             <button
               key={system.id}
@@ -515,7 +578,7 @@ function ConditionsModule({ data, onUpdate, onNext, onBack }: { data: any; onUpd
                 <div className="flex-1">
                   <p className="font-medium text-green-900 text-sm">{system.name}</p>
                   <p className="text-xs text-green-500">
-                    {selectedConditions.filter((c: any) => c.category === system.id).length} selected
+                    {selectedConditions.filter((c) => c.category === system.id).length} selected
                   </p>
                 </div>
                 {hasSelected && <CheckCircle className="w-5 h-5 text-green-500" />}
@@ -539,7 +602,7 @@ function ConditionsModule({ data, onUpdate, onNext, onBack }: { data: any; onUpd
             </p>
             <div className="flex flex-wrap gap-2">
               {bodySystems.find(s => s.id === selectedSystem)?.conditions.map((condition) => {
-                const isSelected = selectedConditions.some((c: any) => c.name === condition);
+                const isSelected = selectedConditions.some((c) => c.name === condition);
                 return (
                   <button
                     key={condition}
@@ -564,7 +627,7 @@ function ConditionsModule({ data, onUpdate, onNext, onBack }: { data: any; onUpd
       {selectedConditions.length > 0 && (
         <div className="space-y-3">
           <p className="font-medium text-green-800">Condition Details:</p>
-          {selectedConditions.map((condition: any) => (
+          {selectedConditions.map((condition) => (
             <div key={condition.name} className="p-4 rounded-xl bg-white border border-green-200">
               <div className="flex items-center justify-between mb-3">
                 <p className="font-medium text-green-900">{condition.name}</p>
@@ -616,14 +679,14 @@ function ConditionsModule({ data, onUpdate, onNext, onBack }: { data: any; onUpd
 // ============================================
 // MEDICATIONS MODULE
 // ============================================
-function MedicationsModule({ data, onUpdate, onNext, onBack }: { data: any; onUpdate: (d: any) => void; onNext: () => void; onBack: () => void }) {
-  const [medications, setMedications] = useState(data.medications || []);
+function MedicationsModule({ data, onUpdate, onNext, onBack }: ModulePropsBase & { onNext: () => void; onBack: () => void }) {
+  const [medications, setMedications] = useState<MedicationEntry[]>(data.medications || []);
   const [searchTerm, setSearchTerm] = useState('');
   const [showSearch, setShowSearch] = useState(false);
 
   const filteredMeds = medicationDatabase.filter(med => 
     med.toLowerCase().includes(searchTerm.toLowerCase()) &&
-    !medications.some((m: any) => m.name === med)
+    !medications.some((m) => m.name === med)
   );
 
   const addMedication = (name: string) => {
@@ -633,13 +696,13 @@ function MedicationsModule({ data, onUpdate, onNext, onBack }: { data: any; onUp
   };
 
   const updateMedication = (index: number, field: string, value: string) => {
-    setMedications(medications.map((m: any, i: number) => 
-      i === index ? { ...m, [field]: value } : m
-    ));
+    setMedications(
+      medications.map((m, i) => (i === index ? { ...m, [field]: value } : m))
+    );
   };
 
   const removeMedication = (index: number) => {
-    setMedications(medications.filter((_: any, i: number) => i !== index));
+    setMedications(medications.filter((_, i) => i !== index));
   };
 
   const handleNext = () => {
@@ -719,7 +782,7 @@ function MedicationsModule({ data, onUpdate, onNext, onBack }: { data: any; onUp
           <button
             key={med}
             onClick={() => addMedication(med)}
-            disabled={medications.some((m: any) => m.name === med)}
+            disabled={medications.some((m) => m.name === med)}
             className="px-3 py-1.5 rounded-full text-sm bg-green-100 text-green-700 hover:bg-green-200 disabled:opacity-50"
           >
             + {med}
@@ -729,7 +792,7 @@ function MedicationsModule({ data, onUpdate, onNext, onBack }: { data: any; onUp
 
       {/* Medications List */}
       <div className="space-y-3">
-        {medications.map((med: any, index: number) => (
+        {medications.map((med, index) => (
           <motion.div
             key={index}
             initial={{ opacity: 0, y: 10 }}
@@ -805,22 +868,20 @@ function MedicationsModule({ data, onUpdate, onNext, onBack }: { data: any; onUp
 // ============================================
 // ALLERGIES MODULE
 // ============================================
-function AllergiesModule({ data, onUpdate, onNext, onBack }: { data: any; onUpdate: (d: any) => void; onNext: () => void; onBack: () => void }) {
-  const [allergies, setAllergies] = useState(data.allergies || []);
+function AllergiesModule({ data, onUpdate, onNext, onBack }: ModulePropsBase & { onNext: () => void; onBack: () => void }) {
+  const [allergies, setAllergies] = useState<AllergyEntry[]>(data.allergies || []);
 
   const toggleAllergy = (allergen: string, type: string) => {
-    const exists = allergies.find((a: any) => a.allergen === allergen);
+    const exists = allergies.find((a) => a.allergen === allergen);
     if (exists) {
-      setAllergies(allergies.filter((a: any) => a.allergen !== allergen));
+      setAllergies(allergies.filter((a) => a.allergen !== allergen));
     } else {
       setAllergies([...allergies, { allergen, type, severity: 'moderate', reaction: '' }]);
     }
   };
 
   const updateAllergy = (allergen: string, field: string, value: string) => {
-    setAllergies(allergies.map((a: any) => 
-      a.allergen === allergen ? { ...a, [field]: value } : a
-    ));
+    setAllergies(allergies.map((a) => (a.allergen === allergen ? { ...a, [field]: value } : a)));
   };
 
   const handleNext = () => {
@@ -852,7 +913,7 @@ function AllergiesModule({ data, onUpdate, onNext, onBack }: { data: any; onUpda
         <p className="font-medium text-green-800 mb-3">Drug Allergies</p>
         <div className="flex flex-wrap gap-2">
           {drugAllergies.map((allergy) => {
-            const isSelected = allergies.some((a: any) => a.allergen === allergy.name);
+            const isSelected = allergies.some((a) => a.allergen === allergy.name);
             return (
               <button
                 key={allergy.name}
@@ -876,7 +937,7 @@ function AllergiesModule({ data, onUpdate, onNext, onBack }: { data: any; onUpda
         <p className="font-medium text-green-800 mb-3">Food Allergies</p>
         <div className="flex flex-wrap gap-2">
           {foodAllergies.map((allergy) => {
-            const isSelected = allergies.some((a: any) => a.allergen === allergy.name);
+            const isSelected = allergies.some((a) => a.allergen === allergy.name);
             return (
               <button
                 key={allergy.name}
@@ -900,7 +961,7 @@ function AllergiesModule({ data, onUpdate, onNext, onBack }: { data: any; onUpda
         <p className="font-medium text-green-800 mb-3">Other</p>
         <div className="flex flex-wrap gap-2">
           {otherAllergies.map((allergy) => {
-            const isSelected = allergies.some((a: any) => a.allergen === allergy.name);
+            const isSelected = allergies.some((a) => a.allergen === allergy.name);
             return (
               <button
                 key={allergy.name}
@@ -926,7 +987,7 @@ function AllergiesModule({ data, onUpdate, onNext, onBack }: { data: any; onUpda
       {allergies.length > 0 && (
         <div className="space-y-3">
           <p className="font-medium text-green-800">Allergy Details:</p>
-          {allergies.map((allergy: any) => (
+          {allergies.map((allergy) => (
             <div key={allergy.allergen} className="p-4 rounded-xl bg-amber-50 border border-amber-200">
               <div className="flex items-center justify-between mb-2">
                 <p className="font-medium text-amber-900">{allergy.allergen}</p>
@@ -976,45 +1037,22 @@ function AllergiesModule({ data, onUpdate, onNext, onBack }: { data: any; onUpda
 // ============================================
 // LIFESTYLE MODULE
 // ============================================
-function LifestyleModule({ data, onUpdate, onNext, onBack }: { data: any; onUpdate: (d: any) => void; onNext: () => void; onBack: () => void }) {
-  const [lifestyle, setLifestyle] = useState(data.lifestyle || {
-    exercise: 'sometimes',
-    alcohol: 'never',
-    smoking: 'never',
-    diet: 'omnivore',
-    sleep: '7',
-    stress: 'moderate'
-  });
+function LifestyleModule({ data, onUpdate, onNext, onBack }: ModulePropsBase & { onNext: () => void; onBack: () => void }) {
+  const [lifestyle, setLifestyle] = useState<HealthProfile['lifestyle']>(
+    data.lifestyle || {
+      exercise: 'sometimes',
+      alcohol: 'never',
+      smoking: 'never',
+      diet: 'omnivore',
+      sleep: '7',
+      stress: 'moderate',
+    }
+  );
 
   const handleNext = () => {
     onUpdate({ ...data, lifestyle });
     onNext();
   };
-
-  const SliderControl = ({ label, value, options, onChange, icon: Icon }: any) => (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Icon className="w-5 h-5 text-green-600" />
-        <Label className="text-green-800 font-medium">{label}</Label>
-      </div>
-      <div className="flex gap-2">
-        {options.map((option: any) => (
-          <button
-            key={option.value}
-            onClick={() => onChange(option.value)}
-            className={`flex-1 py-2 px-1 rounded-lg text-xs font-medium transition-all ${
-              value === option.value
-                ? 'bg-green-500 text-white'
-                : 'bg-green-50 text-green-600 hover:bg-green-100'
-            }`}
-          >
-            {option.emoji && <span className="block text-lg mb-1">{option.emoji}</span>}
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
 
   return (
     <motion.div
@@ -1031,7 +1069,7 @@ function LifestyleModule({ data, onUpdate, onNext, onBack }: { data: any; onUpda
         <p className="text-green-600">Tell us about your daily routine</p>
       </div>
 
-      <SliderControl
+      <LifestyleSliderControl
         label="Exercise Frequency"
         value={lifestyle.exercise}
         icon={Dumbbell}
@@ -1045,7 +1083,7 @@ function LifestyleModule({ data, onUpdate, onNext, onBack }: { data: any; onUpda
         onChange={(v: string) => setLifestyle({ ...lifestyle, exercise: v })}
       />
 
-      <SliderControl
+      <LifestyleSliderControl
         label="Alcohol Consumption"
         value={lifestyle.alcohol}
         icon={Wine}
@@ -1125,7 +1163,7 @@ function LifestyleModule({ data, onUpdate, onNext, onBack }: { data: any; onUpda
         </div>
       </div>
 
-      <SliderControl
+      <LifestyleSliderControl
         label="Stress Level"
         value={lifestyle.stress}
         icon={Zap}
@@ -1151,23 +1189,31 @@ function LifestyleModule({ data, onUpdate, onNext, onBack }: { data: any; onUpda
   );
 }
 
+const PROCESSING_STEPS = [
+  'Validating health profile...',
+  'Cross-referencing conditions...',
+  'Checking medication interactions...',
+  'Analyzing genetic compatibility...',
+  'Comparing with 50,000+ patient outcomes...',
+  'Evaluating insurance coverage...',
+  'Calculating cost-effectiveness...',
+  'Generating recommendations...',
+] as const;
+
 // ============================================
 // PROCESSING SCREEN
 // ============================================
 function ProcessingScreen({ onComplete }: { onComplete: () => void }) {
   const [progress, setProgress] = useState(0);
-  const [currentStep, setCurrentStep] = useState(0);
 
-  const steps = [
-    'Validating health profile...',
-    'Cross-referencing conditions...',
-    'Checking medication interactions...',
-    'Analyzing genetic compatibility...',
-    'Comparing with 50,000+ patient outcomes...',
-    'Evaluating insurance coverage...',
-    'Calculating cost-effectiveness...',
-    'Generating recommendations...',
-  ];
+  const currentStep = useMemo(
+    () =>
+      Math.min(
+        Math.floor((progress / 100) * PROCESSING_STEPS.length),
+        PROCESSING_STEPS.length - 1
+      ),
+    [progress]
+  );
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -1183,11 +1229,6 @@ function ProcessingScreen({ onComplete }: { onComplete: () => void }) {
 
     return () => clearInterval(interval);
   }, [onComplete]);
-
-  useEffect(() => {
-    const stepIndex = Math.floor((progress / 100) * steps.length);
-    setCurrentStep(Math.min(stepIndex, steps.length - 1));
-  }, [progress]);
 
   return (
     <motion.div
@@ -1236,7 +1277,7 @@ function ProcessingScreen({ onComplete }: { onComplete: () => void }) {
           <div className="p-4 rounded-xl bg-green-50 border border-green-200">
             <div className="flex items-center gap-3">
               <Loader2 className="w-5 h-5 text-green-600 animate-spin" />
-              <p className="text-green-700">{steps[currentStep]}</p>
+              <p className="text-green-700">{PROCESSING_STEPS[currentStep]}</p>
             </div>
           </div>
 
@@ -1331,7 +1372,8 @@ function ResultsScreen({ data }: { data: HealthProfile }) {
         return;
       }
 
-      let recRes: any = await supabase
+      type RecQuery = { data: Record<string, unknown>[] | null; error: PostgrestError | null };
+      let recRes: RecQuery = await supabase
         .from('ai_recommendations')
         .select('id,recommendation_text,medications(name),confidence,estimated_monthly_cost,estimated_savings')
         .eq('analysis_id', latestAnalysis.id)

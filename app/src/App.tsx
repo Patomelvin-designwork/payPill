@@ -144,29 +144,80 @@ const HelpTooltip = ({ content, children }: { content: string; children: React.R
   </TooltipProvider>
 );
 
+type DashboardMedRow = {
+  id: string;
+  name?: string | null;
+  dosage?: string | null;
+  frequency?: string | null;
+};
+type DashboardContractRow = {
+  id: string;
+  period_end?: string | null;
+  locked_price_cents?: number | null;
+  quantity_description?: string | null;
+};
+type DashboardDoseRow = {
+  status?: string | null;
+  scheduled_for?: string | null;
+};
+
+type SmartContractListRow = {
+  id: string;
+  medication_label?: string | null;
+  medication_name?: string | null;
+  status?: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
+  end_date?: string | null;
+  end_at?: string | null;
+  locked_price_cents?: number | null;
+  locked_price?: number | string | null;
+  quantity_description?: string | null;
+  quantity?: string | null;
+  tx_hash?: string | null;
+  external_contract_ref?: string | null;
+  contract_ref?: string | null;
+  blockchain_network?: string | null;
+  blockchain?: string | null;
+  chain?: string | null;
+  created_at?: string | null;
+};
+
+type UserMedicationListRow = {
+  id: string;
+  name?: string | null;
+  dosage?: string | null;
+  frequency?: string | null;
+  is_active?: boolean | null;
+  status?: string | null;
+  active?: boolean | null;
+  created_at?: string | null;
+  medications?: { name?: string | null } | null;
+};
+
 // Dashboard loaders: aligned with the Supabase schema defined in
 // supabase/migrations/20260413190000_paypill_core_schema.sql
 // Tables: user_medications, smart_contracts, medication_doses (all keyed by user_id).
-async function loadDashboardMedications(userId: string): Promise<{ rows: any[]; error: unknown | null }> {
+async function loadDashboardMedications(userId: string): Promise<{ rows: DashboardMedRow[]; error: unknown | null }> {
   const r = await supabase
     .from('user_medications')
     .select('id,name,dosage,frequency,is_active')
     .eq('user_id', userId)
     .eq('is_active', true)
     .limit(5);
-  return { rows: r.data ?? [], error: r.error };
+  return { rows: (r.data ?? []) as DashboardMedRow[], error: r.error };
 }
 
-async function loadDashboardContracts(userId: string): Promise<{ rows: any[]; error: unknown | null }> {
+async function loadDashboardContracts(userId: string): Promise<{ rows: DashboardContractRow[]; error: unknown | null }> {
   const r = await supabase
     .from('smart_contracts')
     .select('id,period_end,locked_price_cents,quantity_description,status')
     .eq('user_id', userId)
     .eq('status', 'active');
-  return { rows: r.data ?? [], error: r.error };
+  return { rows: (r.data ?? []) as DashboardContractRow[], error: r.error };
 }
 
-async function loadDashboardAdherence(userId: string, sinceIso: string): Promise<{ rows: any[]; error: unknown | null }> {
+async function loadDashboardAdherence(userId: string, sinceIso: string): Promise<{ rows: DashboardDoseRow[]; error: unknown | null }> {
   const r = await supabase
     .from('medication_doses')
     .select('status,scheduled_for')
@@ -174,7 +225,7 @@ async function loadDashboardAdherence(userId: string, sinceIso: string): Promise
     .gte('scheduled_for', sinceIso)
     .order('scheduled_for', { ascending: false })
     .limit(200);
-  return { rows: r.data ?? [], error: r.error };
+  return { rows: (r.data ?? []) as DashboardDoseRow[], error: r.error };
 }
 
 async function loadDashboardSections(
@@ -182,9 +233,9 @@ async function loadDashboardSections(
   sinceIso: string
 ): Promise<
   [
-    { rows: any[]; error: unknown | null },
-    { rows: any[]; error: unknown | null },
-    { rows: any[]; error: unknown | null },
+    { rows: DashboardMedRow[]; error: unknown | null },
+    { rows: DashboardContractRow[]; error: unknown | null },
+    { rows: DashboardDoseRow[]; error: unknown | null },
   ]
 > {
   return Promise.all([
@@ -1679,16 +1730,16 @@ function DashboardOverview() {
           [medWrap, contractWrap, adherWrap] = await loadDashboardSections(effectiveUserId, sinceIso);
         }
 
-        const meds = (medWrap.rows ?? []).map((m: any) => ({
+        const meds = (medWrap.rows ?? []).map((m) => ({
           id: m.id,
           name: m.name ?? 'Medication',
-          dosage: m.dosage,
-          frequency: m.frequency,
+          dosage: m.dosage ?? '',
+          frequency: m.frequency ?? '',
           status: 'due' as const,
         }));
         setMedications(meds);
 
-        const activeContracts = (contractWrap.rows ?? []).map((c: any) => ({
+        const activeContracts = (contractWrap.rows ?? []).map((c) => ({
           id: c.id,
           endDate: c.period_end ?? null,
           lockedPrice:
@@ -1698,12 +1749,12 @@ function DashboardOverview() {
         setContracts(activeContracts);
 
         const events = adherWrap.rows ?? [];
-        const taken = events.filter((e: any) => e.status === 'taken').length;
+        const taken = events.filter((e) => e.status === 'taken').length;
         const rate = events.length ? Math.round((taken / events.length) * 100) : 0;
         setAdherenceRate(rate);
 
         setActivities(
-          events.slice(0, 4).map((e: any) => ({
+          events.slice(0, 4).map((e) => ({
             text: `Medication marked as ${e.status}`,
             time: e.scheduled_for ? new Date(e.scheduled_for).toLocaleString() : '',
             reward: '',
@@ -2019,7 +2070,7 @@ function AIAnalysisPage() {
 function SmartContractsPage() {
   const navigate = useNavigate();
   const user = usePaypillStore((s) => s.user);
-  const [contracts, setContracts] = useState<any[]>([]);
+  const [contracts, setContracts] = useState<SmartContractListRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -2028,7 +2079,7 @@ function SmartContractsPage() {
       setIsLoading(true);
       // Canonical schema: supabase/migrations/20260413190000_paypill_core_schema.sql
       // (user_id, medication_label, period_start/period_end, locked_price_cents, quantity_description, …)
-      const { data, error }: any = await supabase
+      const { data, error } = await supabase
         .from('smart_contracts')
         .select(
           'id,medication_label,status,period_start,period_end,locked_price_cents,quantity_description,tx_hash,external_contract_ref,blockchain_network,created_at'
@@ -2038,7 +2089,7 @@ function SmartContractsPage() {
       if (error) {
         toast.error(error.message);
       } else {
-        setContracts(data ?? []);
+        setContracts((data ?? []) as SmartContractListRow[]);
       }
       setIsLoading(false);
     };
@@ -2202,7 +2253,7 @@ function AdherencePage() {
     const fetchAdherence = async () => {
       if (!user?.id) return;
       setIsLoading(true);
-      const { data, error }: any = await supabase
+      const { data, error } = await supabase
         .from('medication_doses')
         .select('status,scheduled_for,taken_at')
         .eq('user_id', user.id)
@@ -2359,7 +2410,7 @@ function AdherencePage() {
 // ============================================
 function TreatmentsPage() {
   const user = usePaypillStore((s) => s.user);
-  const [treatments, setTreatments] = useState<any[]>([]);
+  const [treatments, setTreatments] = useState<UserMedicationListRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -2367,7 +2418,7 @@ function TreatmentsPage() {
       if (!user?.id) return;
       setIsLoading(true);
       // Canonical: public.user_medications (user_id, name, dosage, frequency, is_active)
-      const { data, error }: any = await supabase
+      const { data, error } = await supabase
         .from('user_medications')
         .select('id,name,dosage,frequency,is_active,created_at')
         .eq('user_id', user.id)
@@ -2375,7 +2426,7 @@ function TreatmentsPage() {
       if (error) {
         toast.error(error.message);
       } else {
-        setTreatments(data ?? []);
+        setTreatments((data ?? []) as UserMedicationListRow[]);
       }
       setIsLoading(false);
     };
