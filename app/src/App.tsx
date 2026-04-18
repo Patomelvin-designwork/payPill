@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -979,15 +979,23 @@ function SignUpPage() {
                       className="mt-1 border-green-300 data-[state=checked]:bg-green-500"
                     />
                     {/* Do not wrap Links in <Label htmlFor="consent"> — that captures clicks and toggles the checkbox instead of navigating. */}
-                    <div className="text-sm font-normal leading-relaxed text-green-800">
+                    <div className="text-sm font-normal leading-relaxed text-green-800 min-w-0 flex-1">
                       I acknowledge the{' '}
-                      <Link to="/terms" className="font-semibold underline hover:text-green-700">
+                      <button
+                        type="button"
+                        className="font-semibold text-green-700 underline hover:text-green-900 p-0 h-auto min-h-0 bg-transparent border-0 shadow-none cursor-pointer inline text-left"
+                        onClick={() => navigate('/terms')}
+                      >
                         Terms of Service
-                      </Link>{' '}
+                      </button>{' '}
                       and the{' '}
-                      <Link to="/hipaa" className="font-semibold underline hover:text-green-700">
+                      <button
+                        type="button"
+                        className="font-semibold text-green-700 underline hover:text-green-900 p-0 h-auto min-h-0 bg-transparent border-0 shadow-none cursor-pointer inline text-left"
+                        onClick={() => navigate('/hipaa')}
+                      >
                         HIPAA Notice of Privacy Practices
-                      </Link>
+                      </button>
                       , and I consent to the secure handling of my health information as described.
                     </div>
                   </div>
